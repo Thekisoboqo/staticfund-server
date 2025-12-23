@@ -3,7 +3,7 @@ require('dotenv').config();
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-1.5-flash",
 });
 
 async function analyzeDeviceImage(imageBuffer, mimeType) {
@@ -50,6 +50,9 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
 }
 
 async function getEnergyTips(deviceList) {
+    if (!deviceList || deviceList.length === 0) {
+        return { tips: [] };
+    }
     try {
         const prompt = `
         You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems. You are conducting a professional energy audit.
