@@ -51,12 +51,13 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
 
 async function getEnergyTips(deviceList) {
     try {
-        You are a Senior Electrical Engineer and Energy Consultant with 20 + years of experience in South African residential energy systems.You are conducting a professional energy audit.
+        const prompt = `
+        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems. You are conducting a professional energy audit.
 
         Analyze the following electrical device inventory and usage patterns:
-        ${ JSON.stringify(deviceList) }
+        ${JSON.stringify(deviceList)}
 
-        Provide PROFESSIONAL, ENGINEERING - GRADE recommendations. 
+        Provide PROFESSIONAL, ENGINEERING-GRADE recommendations. 
         
         CRITICAL RULE:
         - Analyze ONLY the devices listed in the inventory above.
@@ -124,7 +125,7 @@ async function checkInventoryCompleteness(deviceList) {
     try {
         const prompt = `
         Analyze this list of electrical devices entered by a user for a home energy audit:
-        ${ JSON.stringify(deviceList) }
+        ${JSON.stringify(deviceList)}
 
         Identify common household appliances that are MISSING from this list. 
         Common items to check for:
@@ -170,7 +171,7 @@ async function generateHabits(deviceList) {
         const prompt = `
         Act as a Professional Energy Consultant.
         Analyze this inventory for a South African home:
-        ${ JSON.stringify(deviceList) }
+        ${JSON.stringify(deviceList)}
 
         Create 5 - 7 personalized daily energy - saving habits. 
         Focus on BEHAVIORAL changes based on the SPECIFIC devices present.
@@ -206,7 +207,7 @@ async function interviewUser(deviceList) {
         const prompt = `
         You are an inquisitive Energy Auditor.
         Review this list of devices:
-        ${ JSON.stringify(deviceList) }
+        ${JSON.stringify(deviceList)}
 
         Determine the ONE most critical missing appliance that a typical home should have but is missing here(e.g., Geyser, Fridge, Stove, Kettle).
         
