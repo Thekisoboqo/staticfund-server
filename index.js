@@ -39,7 +39,7 @@ app.get('/api/health', async (req, res) => {
 // --- AUTH ENDPOINTS ---
 
 app.post('/api/register', async (req, res) => {
-    const { email, password, name, province, city } = req.body;
+    const { email, password, name, province, city, monthly_spend } = req.body;
     try {
         // Check if user exists
         const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -49,8 +49,8 @@ app.post('/api/register', async (req, res) => {
 
         // Create user (In production, hash password!)
         const newUser = await pool.query(
-            'INSERT INTO users (email, password, name, province, city) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, province, city',
-            [email, password, name, province, city]
+            'INSERT INTO users (email, password, name, province, city, monthly_spend) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, name, province, city, monthly_spend',
+            [email, password, name, province, city, monthly_spend || 0]
         );
         res.json(newUser.rows[0]);
     } catch (err) {
