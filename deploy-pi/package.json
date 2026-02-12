@@ -1,0 +1,28 @@
+{
+    "name": "staticfund-pi",
+    "version": "2.0.0",
+    "description": "StaticFund Energy Audit - Raspberry Pi Edition (Hardened)",
+    "main": "index.js",
+    "scripts": {
+        "start": "node index.js",
+        "init-db": "node init-db.js",
+        "migrate-passwords": "node scripts/migrate-passwords.js",
+        "backup": "node scripts/backup.js"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "dependencies": {
+        "@google/generative-ai": "^0.24.1",
+        "bcrypt": "^5.1.1",
+        "better-sqlite3": "^11.0.0",
+        "cors": "^2.8.5",
+        "dotenv": "^17.2.3",
+        "express": "^5.1.0",
+        "express-rate-limit": "^7.5.0",
+        "express-validator": "^7.2.1",
+        "helmet": "^8.0.0",
+        "jsonwebtoken": "^9.0.2",
+        "multer": "^2.0.2"
+    }
+}

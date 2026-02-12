@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StaticFund Pi - Admin Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e4e4e4;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        header {
+            text-align: center;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            backdrop-filter: blur(10px);
+        }
+        
+        h1 {
+            font-size: 2rem;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 8px;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+        
+        .status-ok {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+        }
+        
+        .status-error {
+            background: rgba(255, 71, 87, 0.2);
+            color: #ff4757;
+            border: 1px solid rgba(255, 71, 87, 0.3);
+        }
+        
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 24px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .card h3 {
+            font-size: 0.9rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+        }
+        
+        .card .value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #fff;
+        }
+        
+        .card .unit {
+            font-size: 1rem;
+            color: #666;
+            margin-left: 4px;
+        }
+        
+        .card.memory .bar-container {
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            height: 12px;
+            margin-top: 16px;
+            overflow: hidden;
+        }
+        
+        .card.memory .bar {
+            height: 100%;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            border-radius: 8px;
+            transition: width 0.5s ease;
+        }
+        
+        .refresh-btn {
+            display: block;
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(90deg, #00d9ff, #00ff88);
+            border: none;
+            border-radius: 12px;
+            color: #1a1a2e;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        
+        .refresh-btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+        
+        .refresh-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        #lastUpdate {
+            text-align: center;
+            color: #666;
+            margin-top: 16px;
+            font-size: 0.85rem;
+        }
+        
+        .cache-stats {
+            display: flex;
+            gap: 20px;
+            margin-top: 12px;
+        }
+        
+        .cache-stat {
+            flex: 1;
+            text-align: center;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+        
+        .cache-stat .label {
+            font-size: 0.75rem;
+            color: #666;
+            margin-bottom: 4px;
+        }
+        
+        .cache-stat .number {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #00d9ff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>⚡ StaticFund Pi Dashboard</h1>
+            <span id="serverStatus" class="status-badge status-ok">● Online</span>
+        </header>
+        
+        <div class="grid">
+            <div class="card">
+                <h3>Uptime</h3>
+                <div class="value" id="uptime">--<span class="unit">s</span></div>
+            </div>
+            
+            <div class="card">
+                <h3>Total Requests</h3>
+                <div class="value" id="requests">--</div>
+            </div>
+            
+            <div class="card">
+                <h3>Errors</h3>
+                <div class="value" id="errors">--</div>
+            </div>
+            
+            <div class="card memory">
+                <h3>Memory Usage</h3>
+                <div class="value" id="memory">--<span class="unit">MB</span></div>
+                <div class="bar-container">
+                    <div class="bar" id="memoryBar" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Response Cache</h3>
+            <div class="cache-stats">
+                <div class="cache-stat">
+                    <div class="label">Tips Cache</div>
+                    <div class="number" id="tipsCache">0</div>
+                </div>
+                <div class="cache-stat">
+                    <div class="label">Habits Cache</div>
+                    <div class="number" id="habitsCache">0</div>
+                </div>
+            </div>
+        </div>
+        
+        <button class="refresh-btn" onclick="fetchStats()">🔄 Refresh Stats</button>
+        <div id="lastUpdate">Last updated: Never</div>
+    </div>
+    
+    <script>
+        const API_BASE = window.location.origin;
+        let token = localStorage.getItem('adminToken');
+        
+        function formatUptime(seconds) {
+            if (seconds < 60) return `${seconds}s`;
+            if (seconds < 3600) return `${Math.floor(seconds/60)}m`;
+            if (seconds < 86400) return `${Math.floor(seconds/3600)}h`;
+            return `${Math.floor(seconds/86400)}d`;
+        }
+        
+        async function fetchStats() {
+            const btn = document.querySelector('.refresh-btn');
+            btn.disabled = true;
+            btn.textContent = '⏳ Loading...';
+            
+            try {
+                // First try health endpoint (no auth needed)
+                const healthRes = await fetch(`${API_BASE}/api/health`);
+                const health = await healthRes.json();
+                
+                if (health.status === 'ok') {
+                    document.getElementById('serverStatus').className = 'status-badge status-ok';
+                    document.getElementById('serverStatus').textContent = '● Online';
+                    
+                    document.getElementById('uptime').innerHTML = 
+                        `${formatUptime(health.uptime)}<span class="unit"></span>`;
+                    document.getElementById('memory').innerHTML = 
+                        `${health.memory.heapUsed}<span class="unit"></span>`;
+                    
+                    // Memory bar (assuming 512MB max for Pi)
+                    const memPercent = Math.min((parseInt(health.memory.rss) / 512) * 100, 100);
+                    document.getElementById('memoryBar').style.width = `${memPercent}%`;
+                }
+                
+                // Try stats endpoint if we have token
+                if (token) {
+                    const statsRes = await fetch(`${API_BASE}/api/stats`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    
+                    if (statsRes.ok) {
+                        const stats = await statsRes.json();
+                        document.getElementById('requests').textContent = stats.requests.toLocaleString();
+                        document.getElementById('errors').textContent = stats.errors.toLocaleString();
+                        document.getElementById('tipsCache').textContent = stats.cache?.tips?.valid || 0;
+                        document.getElementById('habitsCache').textContent = stats.cache?.habits?.valid || 0;
+                    }
+                } else {
+                    document.getElementById('requests').textContent = '--';
+                    document.getElementById('errors').textContent = '--';
+                }
+                
+                document.getElementById('lastUpdate').textContent = 
+                    `Last updated: ${new Date().toLocaleTimeString()}`;
+                    
+            } catch (err) {
+                document.getElementById('serverStatus').className = 'status-badge status-error';
+                document.getElementById('serverStatus').textContent = '● Offline';
+                console.error('Failed to fetch stats:', err);
+            }
+            
+            btn.disabled = false;
+            btn.textContent = '🔄 Refresh Stats';
+        }
+        
+        // Initial fetch
+        fetchStats();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(fetchStats, 30000);
+    </script>
+</body>
+</html>

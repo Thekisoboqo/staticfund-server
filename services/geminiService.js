@@ -49,67 +49,92 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
     }
 }
 
-async function getEnergyTips(deviceList) {
+async function getEnergyTips(deviceList, userProfile = {}) {
     if (!deviceList || deviceList.length === 0) {
-        return { tips: [] };
+        return { tips: [], schedules: [] };
     }
     try {
-        const prompt = `
-        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems. You are conducting a professional energy audit.
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMonth = now.getMonth() + 1; // 1-12
+        const season = (currentMonth >= 5 && currentMonth <= 8) ? 'WINTER' : 'SUMMER';
+        const isOffPeak = (currentHour >= 22 || currentHour < 6);
 
-        Analyze the following electrical device inventory and usage patterns:
+        // Get user rate if available
+        const userRate = userProfile.rate_per_kwh || 2.72;
+        const municipality = userProfile.municipality || userProfile.city || 'Unknown';
+
+        const prompt = `
+        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems.
+
+        CONTEXT:
+        - Current time: ${now.toLocaleTimeString('en-ZA')}
+        - Current date: ${now.toLocaleDateString('en-ZA')}
+        - Season: ${season}
+        - Current off-peak status: ${isOffPeak ? 'YES (off-peak now)' : 'NO (peak hours)'}
+        - User location: ${municipality}, ${userProfile.province || 'South Africa'}
+        - Electricity rate: R${userRate}/kWh
+        - Household size: ${userProfile.household_size || 'Unknown'}
+        - Property type: ${userProfile.property_type || 'Unknown'}
+        - Has pool: ${userProfile.has_pool ? 'Yes' : 'No'}
+        - Cooking fuel: ${userProfile.cooking_fuel || 'Unknown'}
+        - Works from home: ${userProfile.work_from_home || 'Unknown'}
+
+        SA OFF-PEAK HOURS (Eskom TOU):
+        - Off-peak: 22:00 - 06:00 (weekdays), All weekend
+        - Standard: 09:00 - 17:00 (weekdays)  
+        - Peak: 06:00 - 09:00 and 17:00 - 22:00 (weekdays)
+        - Winter peak rates are ~3x off-peak rates
+
+        Analyze these devices:
         ${JSON.stringify(deviceList)}
 
-        Provide PROFESSIONAL, ENGINEERING-GRADE recommendations. 
-        
-        CRITICAL RULE:
-        - Analyze ONLY the devices listed in the inventory above.
-        - Do NOT hallucinate or assume devices that are not present. 
-        - If the user does not have a dishwasher, DO NOT provide a dishwasher tip.
-        - If the user does not have a pool pump, DO NOT provide a pool pump tip.
-        
-        Your analysis should reflect:
-        1. Deep technical knowledge of electrical systems and power factor
-        2. Understanding of South African electricity tariffs(Eskom, Municipal)
-        3. Practical experience with load management and demand - side optimization
-        4. Deep insight into BEHAVIORAL and OPERATIONAL efficiency
+        CRITICAL RULES:
+        - Analyze ONLY the devices listed above. Do NOT hallucinate devices.
+        - Include SPECIFIC TIMES for switching devices ON/OFF
+        - Factor in the current SEASON (${season}) for heating/cooling advice
+        - Use the ACTUAL rate of R${userRate}/kWh in all calculations
 
-        For EACH device where optimization is possible, provide a detailed recommendation. 
-        Think deeply about how the device is operated, not just its hardware rating.
-
-        FORMAT YOUR RESPONSE AS JSON ONLY(no markdown):
+        FORMAT YOUR RESPONSE AS JSON ONLY (no markdown):
         {
-            "tips": [
-                {
-                    "title": "Technical title (e.g., 'Geyser Load Optimization')",
-                    "description": "Detailed engineering explanation. Include: (1) Current power consumption analysis, (2) Technical cause of inefficiency, (3) Specific solution with wattage/efficiency comparisons, (4) Expected savings calculation showing your math.",
-                    "potential_savings": "R###/month",
-                    "implementation_steps": [
-                        "Step 1: Specific technical action",
-                        "Step 2: ...",
-                        "Step 3: ..."
-                    ],
-                    "priority": "HIGH/MEDIUM/LOW",
-                    "payback_period": "X months"
-                }
-            ]
+          "tips": [
+            {
+              "title": "Technical title",
+              "description": "Detailed explanation with calculations using R${userRate}/kWh rate",
+              "potential_savings": "R###/month",
+              "implementation_steps": ["Step 1", "Step 2", "Step 3"],
+              "priority": "HIGH/MEDIUM/LOW",
+              "payback_period": "X months"
+            }
+          ],
+          "schedules": [
+            {
+              "device_name": "Exact device name from inventory",
+              "turn_on": "HH:MM",
+              "turn_off": "HH:MM",
+              "reason": "Why this schedule saves money",
+              "estimated_daily_saving": "R##"
+            }
+          ]
         }
 
-        CRITICAL REQUIREMENTS:
-        - Always cite specific wattages, efficiencies, and calculations
-            - Reference SA electricity rates(~R2.50 / kWh average)
-                - Include payback period for any recommended equipment upgrades
-                    - Prioritize by ROI and ease of implementation
-                        - Be specific: "Replace 60W incandescent with 7W LED (88% reduction)" not "use efficient bulbs"
+        REQUIREMENTS:
+        - Every device that can be scheduled MUST have a schedule entry
+        - Fridges: recommend thermostat settings, NOT turning off
+        - Geysers: give specific timer ON/OFF times
+        - Washing machines, dishwashers: recommend off-peak usage windows
+        - Lights: recommend sunset/sunrise schedules
+        - Calculate savings using R${userRate}/kWh
+        - Be specific with times (e.g., "06:00" not "morning")
         
-        Return ONLY the JSON object.No explanatory text before or after.
+        Return ONLY the JSON object.
         `;
 
         const result = await model.generateContent(prompt);
         const response = await result.response;
         const text = response.text();
 
-        console.log("Gemini Tips Raw Response:", text); // Debug log
+        console.log("Gemini Tips Raw Response:", text);
 
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
@@ -242,4 +267,157 @@ async function interviewUser(deviceList) {
     }
 }
 
-module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser };
+async function getSmartSolarQuotes(deviceList, userProfile = {}) {
+    try {
+        const rates = require('./ratesDatabase');
+        const rateInfo = rates.getSeasonalRate(userProfile.city || userProfile.province);
+        const peakSunHours = rates.getPeakSunHours(userProfile.province);
+
+        // Calculate total load
+        let totalDailyKwh = 0;
+        let totalRunningWatts = 0;
+        let totalSurgeWatts = 0;
+        deviceList.forEach(d => {
+            const hours = d.hours_per_day || 4;
+            totalDailyKwh += (d.watts * hours) / 1000;
+            totalRunningWatts += d.watts;
+            totalSurgeWatts += (d.surge_watts || d.watts);
+        });
+
+        const prompt = `
+        You are a Solar Installation Expert in South Africa with 15+ years experience.
+
+        USER PROFILE:
+        - Location: ${userProfile.city || 'Unknown'}, ${userProfile.province || 'South Africa'}
+        - Peak Sun Hours: ${peakSunHours}h/day
+        - Current electricity rate: R${rateInfo.rate}/kWh (${rateInfo.season})
+        - Monthly spend: R${userProfile.monthly_spend || 'Unknown'}
+        - Household size: ${userProfile.household_size || 'Unknown'}
+        - Property type: ${userProfile.property_type || 'Unknown'}
+
+        LOAD ANALYSIS:
+        - Total daily consumption: ${totalDailyKwh.toFixed(1)} kWh/day
+        - Total running watts: ${totalRunningWatts}W
+        - Total surge watts: ${totalSurgeWatts}W
+        - Devices: ${JSON.stringify(deviceList.map(d => ({ name: d.name, watts: d.watts, surge: d.surge_watts })))}
+
+        Generate 3 REALISTIC solar package options for this home.
+        Use REAL South African component pricing (2024/2025 prices).
+
+        FORMAT AS JSON ONLY:
+        {
+          "packages": [
+            {
+              "tier": "Essential",
+              "description": "What this covers (e.g. lights, fridge, wifi, phone charging)",
+              "devices_covered": ["list of devices from inventory this covers"],
+              "inverter": "Brand/type and size (e.g., 3kW Hybrid Inverter)",
+              "inverter_cost": "R##,###",
+              "panels": "Count x Wattage (e.g., 4x 450W panels)",
+              "panels_cost": "R##,###",
+              "battery": "Type and size (e.g., 5.12kWh Lithium LFP)",
+              "battery_cost": "R##,###",
+              "installation_cost": "R##,###",
+              "total_cost": "R##,### - R##,###",
+              "monthly_savings": "R#,###",
+              "payback_years": #,
+              "recommended_for": "Load shedding backup only"
+            },
+            {
+              "tier": "Comfort",
+              "description": "...",
+              ...same fields...
+            },
+            {
+              "tier": "Off-Grid",
+              "description": "...",
+              ...same fields...
+            }
+          ]
+        }
+
+        REQUIREMENTS:
+        - Prices must be REALISTIC for SA market
+        - Essential = minimum viable (survive load shedding)
+        - Comfort = full home excluding heavy loads
+        - Off-Grid = complete energy independence
+        - Include installation costs
+        - Calculate payback based on R${rateInfo.rate}/kWh rate
+        - Reference actual component brands available in SA (e.g., Sunsynk, Deye, Canadian Solar)
+
+        Return ONLY the JSON.
+        `;
+
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        console.log("Solar Quotes Raw:", text);
+
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("Invalid solar quote response");
+
+        return JSON.parse(jsonMatch[0]);
+    } catch (error) {
+        console.error("Solar Quotes Error:", error);
+        throw new Error("Failed to generate solar quotes");
+    }
+}
+
+async function getOnboardingQuestion(currentProfile) {
+    try {
+        const prompt = `
+        You are an energy consultant onboarding a new user for a South African energy saving app.
+        
+        Current user profile (what we already know):
+        ${JSON.stringify(currentProfile)}
+
+        Fields we need to fill:
+        - name (string)
+        - province (string - SA province)
+        - city (string)
+        - monthly_spend (number - monthly electricity in Rands)
+        - household_size (string - "1", "2", "3-4", "5+")
+        - property_type (string - "house", "apartment", "townhouse")
+        - has_pool (boolean)
+        - cooking_fuel (string - "electric", "gas", "both")
+        - work_from_home (string - "yes", "sometimes", "no")
+
+        Look at what is already filled and ask the NEXT most useful question.
+        Be friendly and conversational, like chatting with a neighbor.
+        
+        Format as JSON:
+        {
+          "question": "Your friendly question text",
+          "field": "the_database_field_name",
+          "options": ["Option 1", "Option 2", "Option 3"],
+          "type": "select" or "text" or "number",
+          "complete": false
+        }
+
+        If ALL fields are filled, return:
+        {
+          "question": "Great! I have everything I need to give you amazing energy insights!",
+          "field": null,
+          "options": [],
+          "type": "done",
+          "complete": true
+        }
+
+        Return ONLY JSON.
+        `;
+
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        console.log("Onboarding Question:", text);
+
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("Invalid onboarding response");
+
+        return JSON.parse(jsonMatch[0]);
+    } catch (error) {
+        console.error("Onboarding Question Error:", error);
+        throw new Error("Failed to get onboarding question");
+    }
+}
+
+module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion };
+
