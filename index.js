@@ -47,10 +47,12 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'User already exists' });
         }
 
-        // Create user (In production, hash password!)
+        // Create user
         const newUser = await pool.query(
-            'INSERT INTO users (email, password, name, province, city, monthly_spend) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, email, name, province, city, monthly_spend',
-            [email, password, name, province, city, monthly_spend || 0]
+            `INSERT INTO users (email, password, name, province, city, monthly_spend, onboarding_completed) 
+             VALUES ($1, $2, $3, $4, $5, $6, false) 
+             RETURNING id, email, name, province, city, monthly_spend, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed`,
+            [email, password, name, province || null, city || null, monthly_spend || 0]
         );
         res.json(newUser.rows[0]);
     } catch (err) {
@@ -62,22 +64,23 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const result = await pool.query(
+            `SELECT id, email, name, password, province, city, monthly_spend, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed, monthly_budget
+             FROM users WHERE email = $1`, [email]
+        );
         if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const user = result.rows[0];
-        // Check password (In production, compare hash!)
         if (user.password !== password) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Return user info (excluding password)
         const { password: _, ...userInfo } = user;
         res.json(userInfo);
     } catch (err) {
-        console.error(err);
+        console.error('Login error:', err);
         res.status(500).json({ error: err.message });
     }
 });

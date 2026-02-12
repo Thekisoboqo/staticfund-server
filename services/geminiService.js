@@ -3,7 +3,13 @@ require('dotenv').config();
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-2.0-flash",
+});
+
+// Model with Google Search grounding for real-time data
+const groundedModel = genAI.getGenerativeModel({
+    model: "gemini-2.0-flash",
+    tools: [{ googleSearch: {} }],
 });
 
 async function analyzeDeviceImage(imageBuffer, mimeType) {
@@ -66,6 +72,7 @@ async function getEnergyTips(deviceList, userProfile = {}) {
 
         const prompt = `
         You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems.
+        Use Google Search to find the LATEST electricity tariffs for the user's municipality if possible.
 
         CONTEXT:
         - Current time: ${now.toLocaleTimeString('en-ZA')}
@@ -130,7 +137,7 @@ async function getEnergyTips(deviceList, userProfile = {}) {
         Return ONLY the JSON object.
         `;
 
-        const result = await model.generateContent(prompt);
+        const result = await groundedModel.generateContent(prompt);
         const response = await result.response;
         const text = response.text();
 
@@ -286,6 +293,7 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
 
         const prompt = `
         You are a Solar Installation Expert in South Africa with 15+ years experience.
+        Use Google Search to find CURRENT 2025 solar component prices in South Africa for accurate quotes.
 
         USER PROFILE:
         - Location: ${userProfile.city || 'Unknown'}, ${userProfile.province || 'South Africa'}
@@ -348,7 +356,7 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
         Return ONLY the JSON.
         `;
 
-        const result = await model.generateContent(prompt);
+        const result = await groundedModel.generateContent(prompt);
         const text = result.response.text();
         console.log("Solar Quotes Raw:", text);
 
@@ -372,14 +380,14 @@ async function getOnboardingQuestion(currentProfile) {
 
         Fields we need to fill:
         - name (string)
-        - province (string - SA province)
-        - city (string)
         - monthly_spend (number - monthly electricity in Rands)
         - household_size (string - "1", "2", "3-4", "5+")
         - property_type (string - "house", "apartment", "townhouse")
         - has_pool (boolean)
         - cooking_fuel (string - "electric", "gas", "both")
         - work_from_home (string - "yes", "sometimes", "no")
+
+        NOTE: Do NOT ask about province or city — the app automatically detects location via GPS.
 
         Look at what is already filled and ask the NEXT most useful question.
         Be friendly and conversational, like chatting with a neighbor.
