@@ -3,12 +3,12 @@ require('dotenv').config();
 
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash-preview-04-17",
 });
 
 // Model with Google Search grounding for real-time data
 const groundedModel = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash-preview-04-17",
     tools: [{ googleSearch: {} }],
 });
 

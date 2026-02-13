@@ -28,7 +28,7 @@ app.get('/api/test', (req, res) => {
 // Test database connection
 app.get('/api/health', async (req, res) => {
     try {
-        const result = await pool.query('SELECT NOW()');
+        const result = await pool.query("SELECT datetime('now') as now");
         res.json({ status: 'ok', time: result.rows[0].now });
     } catch (err) {
         console.error(err);
