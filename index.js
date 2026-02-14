@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 require('dotenv').config();
-const { analyzeDeviceImage, getEnergyTips } = require('./services/geminiService');
+const { analyzeDeviceImage, getEnergyTips, getOnboardingQuestion, getSmartSolarQuotes } = require('./services/geminiService');
 const multer = require('multer');
 
 const app = express();
@@ -85,32 +85,90 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// Onboarding: Save household profile
+// Onboarding: Save household profile (handles partial updates)
 app.put('/api/users/onboarding', async (req, res) => {
-    const { userId, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed } = req.body;
+    const { userId, ...fields } = req.body;
 
     try {
-        const result = await pool.query(`
-            UPDATE users SET 
-                household_size = $1,
-                property_type = $2,
-                has_pool = $3,
-                cooking_fuel = $4,
-                work_from_home = $5,
-                latitude = $6,
-                longitude = $7,
-                onboarding_completed = $8
-            WHERE id = $9
-            RETURNING id, email, name, province, city, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed, monthly_spend
-        `, [household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed, userId]);
+        // Build dynamic SET clause from provided fields only
+        const allowedFields = ['household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'latitude', 'longitude', 'onboarding_completed'];
+        const updates = [];
+        const values = [];
+        let paramIndex = 1;
+
+        for (const field of allowedFields) {
+            if (fields[field] !== undefined) {
+                updates.push(`${field} = $${paramIndex}`);
+                values.push(fields[field]);
+                paramIndex++;
+            }
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+
+        values.push(userId);
+        const result = await pool.query(
+            `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+            values
+        );
 
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        res.json(result.rows[0]);
+        const { password: _, ...userInfo } = result.rows[0];
+        res.json(userInfo);
     } catch (err) {
         console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Save individual profile field (used by chat onboarding)
+app.put('/api/users/profile-field', async (req, res) => {
+    const { userId, field, value } = req.body;
+    const allowedFields = ['household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'province', 'city', 'monthly_spend', 'monthly_budget', 'latitude', 'longitude'];
+
+    if (!allowedFields.includes(field)) {
+        return res.status(400).json({ error: `Field '${field}' is not allowed` });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING *`,
+            [value, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { password: _, ...userInfo } = result.rows[0];
+        res.json(userInfo);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Gemini: AI Onboarding - get next question
+app.post('/api/gemini/onboard', async (req, res) => {
+    const { userId } = req.body;
+
+    try {
+        // Fetch user profile to see what fields are missing
+        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const userProfile = userResult.rows[0];
+        const result = await getOnboardingQuestion(userProfile);
+        res.json(result);
+    } catch (err) {
+        console.error('Onboarding AI error:', err);
         res.status(500).json({ error: err.message });
     }
 });
