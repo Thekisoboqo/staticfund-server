@@ -1,16 +1,63 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-});
+// OpenRouter API configuration
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MODEL = 'qwen/qwen-2.5-vl-72b-instruct';
 
-// Model with Google Search grounding for real-time data
-const groundedModel = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    tools: [{ googleSearch: {} }],
-});
+// Helper: Send a prompt to OpenRouter and get text response
+async function callAI(prompt, options = {}) {
+    const messages = [];
+
+    if (options.imageBase64 && options.mimeType) {
+        // Vision request with image
+        messages.push({
+            role: 'user',
+            content: [
+                { type: 'text', text: prompt },
+                {
+                    type: 'image_url',
+                    image_url: {
+                        url: `data:${options.mimeType};base64,${options.imageBase64}`
+                    }
+                }
+            ]
+        });
+    } else {
+        messages.push({ role: 'user', content: prompt });
+    }
+
+    const response = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://staticfund.app',
+            'X-Title': 'StaticFund Energy'
+        },
+        body: JSON.stringify({
+            model: MODEL,
+            messages,
+            temperature: 0.7,
+            max_tokens: 2000,
+        })
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`OpenRouter API error (${response.status}): ${errorBody}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+
+// Helper: Extract JSON from AI response text
+function extractJSON(text) {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in AI response");
+    return JSON.parse(jsonMatch[0]);
+}
 
 async function analyzeDeviceImage(imageBuffer, mimeType) {
     try {
@@ -28,29 +75,16 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
         Do not include markdown formatting like \`\`\`json. Just the raw JSON string.
         `;
 
-        const imagePart = {
-            inlineData: {
-                data: imageBuffer.toString("base64"),
-                mimeType: mimeType
-            },
-        };
+        const text = await callAI(prompt, {
+            imageBase64: imageBuffer.toString("base64"),
+            mimeType
+        });
 
-        const result = await model.generateContent([prompt, imagePart]);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Raw Response:", text); // Debug log
-
-        // Clean up potential markdown formatting
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error("Invalid response format from AI");
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        console.log("AI Scan Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Scan Error:", error);
+        console.error("Scan Error:", error);
         throw new Error("Failed to analyze image: " + error.message);
     }
 }
@@ -62,17 +96,14 @@ async function getEnergyTips(deviceList, userProfile = {}) {
     try {
         const now = new Date();
         const currentHour = now.getHours();
-        const currentMonth = now.getMonth() + 1; // 1-12
+        const currentMonth = now.getMonth() + 1;
         const season = (currentMonth >= 5 && currentMonth <= 8) ? 'WINTER' : 'SUMMER';
         const isOffPeak = (currentHour >= 22 || currentHour < 6);
-
-        // Get user rate if available
         const userRate = userProfile.rate_per_kwh || 2.72;
         const municipality = userProfile.municipality || userProfile.city || 'Unknown';
 
         const prompt = `
         You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems.
-        Use Google Search to find the LATEST electricity tariffs for the user's municipality if possible.
 
         CONTEXT:
         - Current time: ${now.toLocaleTimeString('en-ZA')}
@@ -137,21 +168,12 @@ async function getEnergyTips(deviceList, userProfile = {}) {
         Return ONLY the JSON object.
         `;
 
-        const result = await groundedModel.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Tips Raw Response:", text);
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error("Invalid response format from AI");
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        const text = await callAI(prompt);
+        console.log("AI Tips Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Tips Error:", error);
+        console.error("Tips Error:", error);
         throw new Error("Failed to generate tips");
     }
 }
@@ -164,39 +186,30 @@ async function checkInventoryCompleteness(deviceList) {
 
         Identify common household appliances that are MISSING from this list. 
         Common items to check for:
-            - Geyser / Water Heater
-                - Refrigerator / Fridge
-                - Washing Machine
-                    - Electric Stove / Oven
-                        - WiFi Router
-                            - Lights / Lighting Circuits
-                                - Kettle
-                                - TV
+        - Geyser / Water Heater
+        - Refrigerator / Fridge
+        - Washing Machine
+        - Electric Stove / Oven
+        - WiFi Router
+        - Lights / Lighting Circuits
+        - Kettle
+        - TV
 
-        Return ONLY a JSON object with a "missing_items" array.Each item should have:
+        Return ONLY a JSON object with a "missing_items" array. Each item should have:
         - name: (string) The name of the missing appliance.
-        - question: (string) A friendly question to ask the user(e.g., "I didn't see a Geyser. Do you have an electric water heater?").
+        - question: (string) A friendly question to ask the user (e.g., "I didn't see a Geyser. Do you have an electric water heater?").
         - estimated_watts: (number) Typical wattage for this appliance.
         
-        Limit to the top 3 most likely missing essential items.If the list looks complete, return an empty array.
+        Limit to the top 3 most likely missing essential items. If the list looks complete, return an empty array.
         Do not include markdown formatting.
         `;
 
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Completeness Raw Response:", text);
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            return { missing_items: [] }; // Fallback
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        const text = await callAI(prompt);
+        console.log("AI Completeness Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Completeness Error:", error);
+        console.error("Completeness Error:", error);
         return { missing_items: [] };
     }
 }
@@ -208,15 +221,15 @@ async function generateHabits(deviceList) {
         Analyze this inventory for a South African home:
         ${JSON.stringify(deviceList)}
 
-        Create 5 - 7 personalized daily energy - saving habits. 
+        Create 5-7 personalized daily energy-saving habits. 
         Focus on BEHAVIORAL changes based on the SPECIFIC devices present.
 
-            Examples:
+        Examples:
         - If Pool Pump exists -> "Run pool pump for 4h only (Winter)"
-            - If Tumble Dryer exists -> "Sun dry one load of laundry"
-                - If Geyser exists -> "Shower in under 5 minutes"
-                    - If Dishwasher exists -> "Run dishwasher only when fully packed"
-                        - General -> "Turn off lights in empty rooms"
+        - If Tumble Dryer exists -> "Sun dry one load of laundry"
+        - If Geyser exists -> "Shower in under 5 minutes"
+        - If Dishwasher exists -> "Run dishwasher only when fully packed"
+        - General -> "Turn off lights in empty rooms"
 
         Return JSON ONLY:
         {
@@ -226,13 +239,12 @@ async function generateHabits(deviceList) {
         }
         `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        console.log("Gemini Habits Response:", text);
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : { habits: [] };
+        const text = await callAI(prompt);
+        console.log("AI Habits Response:", text);
+        const result = extractJSON(text);
+        return result;
     } catch (error) {
-        console.error("Gemini Habits Error:", error);
+        console.error("Habits Error:", error);
         return { habits: [] };
     }
 }
@@ -244,9 +256,9 @@ async function interviewUser(deviceList) {
         Review this list of devices:
         ${JSON.stringify(deviceList)}
 
-        Determine the ONE most critical missing appliance that a typical home should have but is missing here(e.g., Geyser, Fridge, Stove, Kettle).
+        Determine the ONE most critical missing appliance that a typical home should have but is missing here (e.g., Geyser, Fridge, Stove, Kettle).
         
-        If the list looks complete(has all essentials), return null.
+        If the list looks complete (has all essentials), return null.
         
         If something is missing, ask a friendly question to check if they have it.
         Also provide the suggested device details if they say "Yes".
@@ -254,33 +266,32 @@ async function interviewUser(deviceList) {
         Return JSON ONLY:
         {
             "question": "I noticed you don't have a Geyser listed. Do you use an electric water heater?",
-                "suggested_device": { "name": "Geyser (150L)", "watts": 3000, "surge_watts": 0 }
+            "suggested_device": { "name": "Geyser (150L)", "watts": 3000, "surge_watts": 0 }
         }
-        OR return null if complete.
+        OR return the word null if complete.
         `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        console.log("Gemini Interview Response:", text);
+        const text = await callAI(prompt);
+        console.log("AI Interview Response:", text);
 
-        // Handle "null" or empty response
         if (text.includes("null") || text.trim() === "") return null;
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+        return extractJSON(text);
     } catch (error) {
-        console.error("Gemini Interview Error:", error);
+        console.error("Interview Error:", error);
         return null;
     }
 }
 
 async function getSmartSolarQuotes(deviceList, userProfile = {}) {
     try {
-        const rates = require('./ratesDatabase');
-        const rateInfo = rates.getSeasonalRate(userProfile.city || userProfile.province);
-        const peakSunHours = rates.getPeakSunHours(userProfile.province);
+        let rateInfo = { rate: 2.72, season: 'SUMMER' };
+        let peakSunHours = 5.5;
+        try {
+            const rates = require('./ratesDatabase');
+            rateInfo = rates.getSeasonalRate(userProfile.city || userProfile.province);
+            peakSunHours = rates.getPeakSunHours(userProfile.province);
+        } catch (e) { /* rates module may not exist */ }
 
-        // Calculate total load
         let totalDailyKwh = 0;
         let totalRunningWatts = 0;
         let totalSurgeWatts = 0;
@@ -293,7 +304,6 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
 
         const prompt = `
         You are a Solar Installation Expert in South Africa with 15+ years experience.
-        Use Google Search to find CURRENT 2025 solar component prices in South Africa for accurate quotes.
 
         USER PROFILE:
         - Location: ${userProfile.city || 'Unknown'}, ${userProfile.province || 'South Africa'}
@@ -317,29 +327,29 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
           "packages": [
             {
               "tier": "Essential",
-              "description": "What this covers (e.g. lights, fridge, wifi, phone charging)",
-              "devices_covered": ["list of devices from inventory this covers"],
-              "inverter": "Brand/type and size (e.g., 3kW Hybrid Inverter)",
+              "description": "What this covers",
+              "devices_covered": ["list of devices"],
+              "inverter": "Brand/type and size",
               "inverter_cost": "R##,###",
-              "panels": "Count x Wattage (e.g., 4x 450W panels)",
+              "panels": "Count x Wattage",
               "panels_cost": "R##,###",
-              "battery": "Type and size (e.g., 5.12kWh Lithium LFP)",
+              "battery": "Type and size",
               "battery_cost": "R##,###",
               "installation_cost": "R##,###",
               "total_cost": "R##,### - R##,###",
               "monthly_savings": "R#,###",
-              "payback_years": #,
+              "payback_years": 5,
               "recommended_for": "Load shedding backup only"
             },
             {
               "tier": "Comfort",
               "description": "...",
-              ...same fields...
+              "...": "same fields"
             },
             {
               "tier": "Off-Grid",
               "description": "...",
-              ...same fields...
+              "...": "same fields"
             }
           ]
         }
@@ -356,14 +366,9 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
         Return ONLY the JSON.
         `;
 
-        const result = await groundedModel.generateContent(prompt);
-        const text = result.response.text();
-        console.log("Solar Quotes Raw:", text);
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error("Invalid solar quote response");
-
-        return JSON.parse(jsonMatch[0]);
+        const text = await callAI(prompt);
+        console.log("Solar Quotes Response:", text);
+        return extractJSON(text);
     } catch (error) {
         console.error("Solar Quotes Error:", error);
         throw new Error("Failed to generate solar quotes");
@@ -413,14 +418,9 @@ async function getOnboardingQuestion(currentProfile) {
         Return ONLY JSON.
         `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
+        const text = await callAI(prompt);
         console.log("Onboarding Question:", text);
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) throw new Error("Invalid onboarding response");
-
-        return JSON.parse(jsonMatch[0]);
+        return extractJSON(text);
     } catch (error) {
         console.error("Onboarding Question Error:", error);
         throw new Error("Failed to get onboarding question");
@@ -428,4 +428,3 @@ async function getOnboardingQuestion(currentProfile) {
 }
 
 module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion };
-
