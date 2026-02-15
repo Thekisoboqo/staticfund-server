@@ -80,6 +80,47 @@ async function initSupabase() {
         `);
         console.log("✅ user_habit_logs table ready");
 
+        // Quotations
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS quotations (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                user_name VARCHAR(100),
+                user_email VARCHAR(100),
+                user_city VARCHAR(50),
+                user_province VARCHAR(50),
+                package_tier VARCHAR(20),
+                package_details TEXT,
+                devices_summary TEXT,
+                total_cost VARCHAR(50),
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        `);
+        console.log("✅ quotations table ready");
+
+        // Add onboarding columns if missing
+        const onboardingCols = [
+            'monthly_spend DECIMAL(10, 2) DEFAULT 0',
+            'household_size VARCHAR(10) DEFAULT NULL',
+            'property_type VARCHAR(20) DEFAULT NULL',
+            'has_pool BOOLEAN DEFAULT FALSE',
+            'cooking_fuel VARCHAR(20) DEFAULT NULL',
+            'work_from_home VARCHAR(20) DEFAULT NULL',
+            'latitude DECIMAL(10, 7) DEFAULT NULL',
+            'longitude DECIMAL(10, 7) DEFAULT NULL',
+            'onboarding_completed BOOLEAN DEFAULT FALSE',
+            'city VARCHAR(100) DEFAULT NULL',
+            'province VARCHAR(50) DEFAULT NULL',
+        ];
+        for (const col of onboardingCols) {
+            const colName = col.split(' ')[0];
+            try {
+                await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col}`);
+            } catch (e) { /* column already exists */ }
+        }
+        console.log("✅ onboarding columns ready");
+
         console.log("\n🎉 All tables created successfully!");
         process.exit(0);
 

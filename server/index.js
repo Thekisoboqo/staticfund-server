@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const pool = require('./db');
 require('dotenv').config();
-const { analyzeDeviceImage, getEnergyTips } = require('./services/geminiService');
+const { analyzeDeviceImage, getEnergyTips, getOnboardingQuestion, getSmartSolarQuotes } = require('./services/geminiService');
 const multer = require('multer');
 
 const app = express();
@@ -28,7 +28,7 @@ app.get('/api/test', (req, res) => {
 // Test database connection
 app.get('/api/health', async (req, res) => {
     try {
-        const result = await pool.query('SELECT NOW()');
+        const result = await pool.query("SELECT NOW() as now");
         res.json({ status: 'ok', time: result.rows[0].now });
     } catch (err) {
         console.error(err);
@@ -39,7 +39,7 @@ app.get('/api/health', async (req, res) => {
 // --- AUTH ENDPOINTS ---
 
 app.post('/api/register', async (req, res) => {
-    const { email, password, name, province, city } = req.body;
+    const { email, password, name, province, city, monthly_spend } = req.body;
     try {
         // Check if user exists
         const userCheck = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -47,10 +47,12 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ error: 'User already exists' });
         }
 
-        // Create user (In production, hash password!)
+        // Create user
         const newUser = await pool.query(
-            'INSERT INTO users (email, password, name, province, city) VALUES ($1, $2, $3, $4, $5) RETURNING id, email, name, province, city',
-            [email, password, name, province, city]
+            `INSERT INTO users (email, password, name, province, city, monthly_spend, onboarding_completed) 
+             VALUES ($1, $2, $3, $4, $5, $6, false) 
+             RETURNING id, email, name, province, city, monthly_spend, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed`,
+            [email, password, name, province || null, city || null, monthly_spend || 0]
         );
         res.json(newUser.rows[0]);
     } catch (err) {
@@ -62,22 +64,111 @@ app.post('/api/register', async (req, res) => {
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+        const result = await pool.query(
+            `SELECT id, email, name, password, province, city, monthly_spend, household_size, property_type, has_pool, cooking_fuel, work_from_home, latitude, longitude, onboarding_completed, monthly_budget
+             FROM users WHERE email = $1`, [email]
+        );
         if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
         const user = result.rows[0];
-        // Check password (In production, compare hash!)
         if (user.password !== password) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
 
-        // Return user info (excluding password)
         const { password: _, ...userInfo } = user;
         res.json(userInfo);
     } catch (err) {
+        console.error('Login error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Onboarding: Save household profile (handles partial updates)
+app.put('/api/users/onboarding', async (req, res) => {
+    const { userId, ...fields } = req.body;
+
+    try {
+        // Build dynamic SET clause from provided fields only
+        const allowedFields = ['household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'latitude', 'longitude', 'onboarding_completed'];
+        const updates = [];
+        const values = [];
+        let paramIndex = 1;
+
+        for (const field of allowedFields) {
+            if (fields[field] !== undefined) {
+                updates.push(`${field} = $${paramIndex}`);
+                values.push(fields[field]);
+                paramIndex++;
+            }
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+
+        values.push(userId);
+        const result = await pool.query(
+            `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+            values
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { password: _, ...userInfo } = result.rows[0];
+        res.json(userInfo);
+    } catch (err) {
         console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Save individual profile field (used by chat onboarding)
+app.put('/api/users/profile-field', async (req, res) => {
+    const { userId, field, value } = req.body;
+    const allowedFields = ['household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'province', 'city', 'monthly_spend', 'monthly_budget', 'latitude', 'longitude'];
+
+    if (!allowedFields.includes(field)) {
+        return res.status(400).json({ error: `Field '${field}' is not allowed` });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING *`,
+            [value, userId]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const { password: _, ...userInfo } = result.rows[0];
+        res.json(userInfo);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Gemini: AI Onboarding - get next question
+app.post('/api/gemini/onboard', async (req, res) => {
+    const { userId } = req.body;
+
+    try {
+        // Fetch user profile to see what fields are missing
+        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        const userProfile = userResult.rows[0];
+        const result = await getOnboardingQuestion(userProfile);
+        res.json(result);
+    } catch (err) {
+        console.error('Onboarding AI error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -267,15 +358,60 @@ app.post('/api/gemini/scan', async (req, res) => {
     }
 });
 
-// Gemini: AI Tips
+// Update a specific profile field (used during chat onboarding)
+app.put('/api/users/profile-field', async (req, res) => {
+    const { userId, field, value } = req.body;
+    if (!userId || !field) {
+        return res.status(400).json({ error: 'Missing field or userId' });
+    }
+
+    try {
+        // Allow list of valid fields to prevent SQL injection or bad data
+        const validFields = ['city', 'province', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'name'];
+        if (!validFields.includes(field)) {
+            return res.status(400).json({ error: `Invalid field: ${field}` });
+        }
+
+        // Construct query safely
+        const query = `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING *`;
+        const result = await pool.query(query, [value, userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true, user: result.rows[0] });
+    } catch (err) {
+        console.error("Profile Update Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Gemini: AI Tips (time-aware + location-aware)
 app.post('/api/gemini/tips', async (req, res) => {
-    const { devices } = req.body;
+    const { devices, userId } = req.body;
     if (!devices) {
         return res.status(400).json({ error: 'No device list provided' });
     }
 
     try {
-        const result = await getEnergyTips(devices);
+        // Fetch user profile for context
+        let userProfile = {};
+        if (userId) {
+            const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+            if (userResult.rows.length > 0) {
+                const { password, ...profile } = userResult.rows[0];
+                userProfile = profile;
+
+                // Add rate from rates database
+                const rates = require('./services/ratesDatabase');
+                const rateInfo = rates.getRate(profile.city || profile.province);
+                userProfile.rate_per_kwh = rateInfo.rate;
+                userProfile.municipality = rateInfo.municipality;
+            }
+        }
+
+        const result = await getEnergyTips(devices, userProfile);
         res.json(result);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -293,6 +429,109 @@ app.post('/api/gemini/completeness', async (req, res) => {
         const { checkInventoryCompleteness } = require('./services/geminiService');
         const result = await checkInventoryCompleteness(devices);
         res.json(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Gemini: Smart Solar Quotes
+app.post('/api/gemini/solar-quotes', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    try {
+        // Fetch user profile
+        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        const { password, ...userProfile } = userResult.rows[0];
+
+        // Fetch devices
+        const devicesResult = await pool.query(`
+            SELECT d.*, COALESCE((SELECT hours_per_day FROM usage_logs WHERE device_id = d.id ORDER BY date DESC LIMIT 1), 4) as hours_per_day
+            FROM devices d WHERE d.user_id = $1
+        `, [userId]);
+        const devices = devicesResult.rows;
+
+        const { getSmartSolarQuotes } = require('./services/geminiService');
+        const result = await getSmartSolarQuotes(devices, userProfile);
+        res.json(result);
+    } catch (err) {
+        console.error("Solar Quotes Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Quotation Request — save to DB and notify StaticFund
+app.post('/api/quotations/request', async (req, res) => {
+    const { userId, package_tier, package_details, total_cost } = req.body;
+    if (!userId || !package_tier) return res.status(400).json({ error: 'Missing fields' });
+
+    try {
+        // Get user info
+        const userResult = await pool.query('SELECT name, email, city, province, monthly_spend FROM users WHERE id = $1', [userId]);
+        const user = userResult.rows[0];
+
+        // Get device summary
+        const devicesResult = await pool.query('SELECT name, watts FROM devices WHERE user_id = $1', [userId]);
+        const devicesSummary = devicesResult.rows.map(d => `${d.name} (${d.watts}W)`).join(', ');
+
+        // Save quotation
+        const result = await pool.query(`
+            INSERT INTO quotations (user_id, user_name, user_email, user_city, user_province, package_tier, package_details, devices_summary, total_cost, status)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+            RETURNING *
+        `, [userId, user.name, user.email, user.city, user.province, package_tier, JSON.stringify(package_details), devicesSummary, total_cost]);
+
+        console.log(`📧 NEW QUOTATION REQUEST from ${user.name} (${user.email}) - ${package_tier} package - ${total_cost}`);
+        console.log(`   Devices: ${devicesSummary}`);
+        console.log(`   → Email should be sent to staticfund@gmail.com`);
+
+        res.json({
+            success: true,
+            message: 'Quotation request submitted! StaticFund will contact you soon.',
+            quotation: result.rows[0]
+        });
+    } catch (err) {
+        console.error("Quotation Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Gemini: Conversational Onboarding
+app.post('/api/gemini/onboard', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    try {
+        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        const { password, ...profile } = userResult.rows[0];
+
+        const { getOnboardingQuestion } = require('./services/geminiService');
+        const result = await getOnboardingQuestion(profile);
+        res.json(result);
+    } catch (err) {
+        console.error("Onboarding Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Onboarding: Update single field
+app.put('/api/users/profile-field', async (req, res) => {
+    const { userId, field, value } = req.body;
+    const allowedFields = ['name', 'province', 'city', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home'];
+
+    if (!allowedFields.includes(field)) {
+        return res.status(400).json({ error: 'Invalid field' });
+    }
+
+    try {
+        const result = await pool.query(
+            `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING id, email, name, province, city, household_size, property_type, has_pool, cooking_fuel, work_from_home, monthly_spend, onboarding_completed`,
+            [value, userId]
+        );
+        res.json(result.rows[0]);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });

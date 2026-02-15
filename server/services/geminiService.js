@@ -1,10 +1,63 @@
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 require('dotenv').config();
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
-});
+// OpenRouter API configuration
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MODEL = 'qwen/qwen-2.5-vl-72b-instruct';
+
+// Helper: Send a prompt to OpenRouter and get text response
+async function callAI(prompt, options = {}) {
+    const messages = [];
+
+    if (options.imageBase64 && options.mimeType) {
+        // Vision request with image
+        messages.push({
+            role: 'user',
+            content: [
+                { type: 'text', text: prompt },
+                {
+                    type: 'image_url',
+                    image_url: {
+                        url: `data:${options.mimeType};base64,${options.imageBase64}`
+                    }
+                }
+            ]
+        });
+    } else {
+        messages.push({ role: 'user', content: prompt });
+    }
+
+    const response = await fetch(OPENROUTER_URL, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://staticfund.app',
+            'X-Title': 'StaticFund Energy'
+        },
+        body: JSON.stringify({
+            model: MODEL,
+            messages,
+            temperature: 0.7,
+            max_tokens: 2000,
+        })
+    });
+
+    if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`OpenRouter API error (${response.status}): ${errorBody}`);
+    }
+
+    const data = await response.json();
+    return data.choices[0].message.content;
+}
+
+// Helper: Extract JSON from AI response text
+function extractJSON(text) {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in AI response");
+    return JSON.parse(jsonMatch[0]);
+}
 
 async function analyzeDeviceImage(imageBuffer, mimeType) {
     try {
@@ -22,100 +75,105 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
         Do not include markdown formatting like \`\`\`json. Just the raw JSON string.
         `;
 
-        const imagePart = {
-            inlineData: {
-                data: imageBuffer.toString("base64"),
-                mimeType: mimeType
-            },
-        };
+        const text = await callAI(prompt, {
+            imageBase64: imageBuffer.toString("base64"),
+            mimeType
+        });
 
-        const result = await model.generateContent([prompt, imagePart]);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Raw Response:", text); // Debug log
-
-        // Clean up potential markdown formatting
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error("Invalid response format from AI");
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        console.log("AI Scan Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Scan Error:", error);
+        console.error("Scan Error:", error);
         throw new Error("Failed to analyze image: " + error.message);
     }
 }
 
-async function getEnergyTips(deviceList) {
+async function getEnergyTips(deviceList, userProfile = {}) {
+    if (!deviceList || deviceList.length === 0) {
+        return { tips: [], schedules: [] };
+    }
     try {
-        const prompt = `
-        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems. You are conducting a professional energy audit.
+        const now = new Date();
+        const currentHour = now.getHours();
+        const currentMonth = now.getMonth() + 1;
+        const season = (currentMonth >= 5 && currentMonth <= 8) ? 'WINTER' : 'SUMMER';
+        const isOffPeak = (currentHour >= 22 || currentHour < 6);
+        const userRate = userProfile.rate_per_kwh || 2.72;
+        const municipality = userProfile.municipality || userProfile.city || 'Unknown';
 
-        Analyze the following electrical device inventory and usage patterns:
+        const prompt = `
+        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems.
+
+        CONTEXT:
+        - Current time: ${now.toLocaleTimeString('en-ZA')}
+        - Current date: ${now.toLocaleDateString('en-ZA')}
+        - Season: ${season}
+        - Current off-peak status: ${isOffPeak ? 'YES (off-peak now)' : 'NO (peak hours)'}
+        - User location: ${municipality}, ${userProfile.province || 'South Africa'}
+        - Electricity rate: R${userRate}/kWh
+        - Household size: ${userProfile.household_size || 'Unknown'}
+        - Property type: ${userProfile.property_type || 'Unknown'}
+        - Has pool: ${userProfile.has_pool ? 'Yes' : 'No'}
+        - Cooking fuel: ${userProfile.cooking_fuel || 'Unknown'}
+        - Works from home: ${userProfile.work_from_home || 'Unknown'}
+
+        SA OFF-PEAK HOURS (Eskom TOU):
+        - Off-peak: 22:00 - 06:00 (weekdays), All weekend
+        - Standard: 09:00 - 17:00 (weekdays)  
+        - Peak: 06:00 - 09:00 and 17:00 - 22:00 (weekdays)
+        - Winter peak rates are ~3x off-peak rates
+
+        Analyze these devices:
         ${JSON.stringify(deviceList)}
 
-        Provide PROFESSIONAL, ENGINEERING-GRADE recommendations. Your analysis should reflect:
-        1. Deep technical knowledge of electrical systems and power factor
-        2. Understanding of South African electricity tariffs (Eskom, Municipal)
-        3. Practical experience with load management and demand-side optimization
-        4. Knowledge of modern energy-efficient technologies (inverter motors, LED, VSD drives)
-        5. Deep insight into BEHAVIORAL and OPERATIONAL efficiency (e.g., "Run dishwasher only when full", "Reduce washing temperature to 30°C")
-
-        For EACH device where optimization is possible, provide a detailed recommendation. 
-        Think deeply about how the device is operated, not just its hardware rating.
-
-        SPECIFIC CHECKS:
-        - Dishwasher/Washing Machine: Suggest full loads, eco-cycles, and lower temperatures.
-        - Geyser: Suggest timing (not running 24/7 if usage suggests it), temperature settings, and blankets.
-        - Pool Pump: Suggest reduced running hours in winter vs summer.
-        - Fridge: Suggest checking seals and spacing if consumption seems high.
+        CRITICAL RULES:
+        - Analyze ONLY the devices listed above. Do NOT hallucinate devices.
+        - **BE EXTREMELY SPECIFIC WITH TIMES.** Do not say "during the day". Say "between 10:00 and 14:00".
+        - **GEYSER:** Rule of thumb -> OFF at 06:00, ON at 16:00 (or similar based on usage).
+        - **POOL PUMP:** Rule of thumb -> 4 hours in winter, 6 hours in summer.
+        - **FRIDGE:** Rule of thumb -> Set to 4°C.
+        - Factor in the current SEASON (${season}) for heating/cooling advice.
+        - Use the ACTUAL rate of R${userRate}/kWh in all calculations.
 
         FORMAT YOUR RESPONSE AS JSON ONLY (no markdown):
         {
           "tips": [
             {
-              "title": "Technical title (e.g., 'Geyser Load Optimization')",
-              "description": "Detailed engineering explanation. Include: (1) Current power consumption analysis, (2) Technical cause of inefficiency, (3) Specific solution with wattage/efficiency comparisons, (4) Expected savings calculation showing your math.",
+              "title": "Specific Action Title",
+              "description": "Detailed advice. E.g. 'Run your pool pump for exactly 4 hours between 10:00 and 14:00.'",
               "potential_savings": "R###/month",
-              "implementation_steps": [
-                "Step 1: Specific technical action",
-                "Step 2: ...",
-                "Step 3: ..."
-              ],
+              "implementation_steps": ["Step 1", "Step 2", "Step 3"],
               "priority": "HIGH/MEDIUM/LOW",
-              "payback_period": "X months"
+              "payback_period": "Immediate"
+            }
+          ],
+          "schedules": [
+            {
+              "device_name": "Device Name",
+              "turn_on": "HH:MM",
+              "turn_off": "HH:MM",
+              "reason": "Why this specific time window saves money",
+              "estimated_daily_saving": "R##"
             }
           ]
         }
 
-        CRITICAL REQUIREMENTS:
-        - Always cite specific wattages, efficiencies, and calculations
-        - Reference SA electricity rates (~R2.50/kWh average)
-        - Include payback period for any recommended equipment upgrades
-        - Prioritize by ROI and ease of implementation
-        - Be specific: "Replace 60W incandescent with 7W LED (88% reduction)" not "use efficient bulbs"
+        REQUIREMENTS:
+        - Every heavy device (Geyser, Pool Pump, Heater, AC) MUST have a schedule entry.
+        - Fridges: recommend thermostat settings in the tips section.
+        - Washing machines, dishwashers: recommend off-peak usage windows (22:00 - 06:00).
+        - Calculate savings using R${userRate}/kWh.
         
-        Return ONLY the JSON object. No explanatory text before or after.
+        Return ONLY the JSON object.
         `;
 
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Tips Raw Response:", text); // Debug log
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            throw new Error("Invalid response format from AI");
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        const text = await callAI(prompt);
+        console.log("AI Tips Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Tips Error:", error);
+        console.error("Tips Error:", error);
         throw new Error("Failed to generate tips");
     }
 }
@@ -146,21 +204,12 @@ async function checkInventoryCompleteness(deviceList) {
         Do not include markdown formatting.
         `;
 
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        const text = response.text();
-
-        console.log("Gemini Completeness Raw Response:", text);
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        if (!jsonMatch) {
-            return { missing_items: [] }; // Fallback
-        }
-
-        return JSON.parse(jsonMatch[0]);
+        const text = await callAI(prompt);
+        console.log("AI Completeness Response:", text);
+        return extractJSON(text);
 
     } catch (error) {
-        console.error("Gemini Completeness Error:", error);
+        console.error("Completeness Error:", error);
         return { missing_items: [] };
     }
 }
@@ -174,7 +223,7 @@ async function generateHabits(deviceList) {
 
         Create 5-7 personalized daily energy-saving habits. 
         Focus on BEHAVIORAL changes based on the SPECIFIC devices present.
-        
+
         Examples:
         - If Pool Pump exists -> "Run pool pump for 4h only (Winter)"
         - If Tumble Dryer exists -> "Sun dry one load of laundry"
@@ -190,13 +239,12 @@ async function generateHabits(deviceList) {
         }
         `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        console.log("Gemini Habits Response:", text);
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : { habits: [] };
+        const text = await callAI(prompt);
+        console.log("AI Habits Response:", text);
+        const result = extractJSON(text);
+        return result;
     } catch (error) {
-        console.error("Gemini Habits Error:", error);
+        console.error("Habits Error:", error);
         return { habits: [] };
     }
 }
@@ -220,22 +268,166 @@ async function interviewUser(deviceList) {
             "question": "I noticed you don't have a Geyser listed. Do you use an electric water heater?",
             "suggested_device": { "name": "Geyser (150L)", "watts": 3000, "surge_watts": 0 }
         }
-        OR return null if complete.
+        OR return the word null if complete.
         `;
 
-        const result = await model.generateContent(prompt);
-        const text = result.response.text();
-        console.log("Gemini Interview Response:", text);
+        const text = await callAI(prompt);
+        console.log("AI Interview Response:", text);
 
-        // Handle "null" or empty response
         if (text.includes("null") || text.trim() === "") return null;
-
-        const jsonMatch = text.match(/\{[\s\S]*\}/);
-        return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+        return extractJSON(text);
     } catch (error) {
-        console.error("Gemini Interview Error:", error);
+        console.error("Interview Error:", error);
         return null;
     }
 }
 
-module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser };
+async function getSmartSolarQuotes(deviceList, userProfile = {}) {
+    try {
+        let rateInfo = { rate: 2.72, season: 'SUMMER' };
+        let peakSunHours = 5.5;
+        try {
+            const rates = require('./ratesDatabase');
+            rateInfo = rates.getSeasonalRate(userProfile.city || userProfile.province);
+            peakSunHours = rates.getPeakSunHours(userProfile.province);
+        } catch (e) { /* rates module may not exist */ }
+
+        let totalDailyKwh = 0;
+        let totalRunningWatts = 0;
+        let totalSurgeWatts = 0;
+        deviceList.forEach(d => {
+            const hours = d.hours_per_day || 4;
+            totalDailyKwh += (d.watts * hours) / 1000;
+            totalRunningWatts += d.watts;
+            totalSurgeWatts += (d.surge_watts || d.watts);
+        });
+
+        const prompt = `
+        You are a Solar Installation Expert in South Africa with 15+ years experience.
+
+        USER PROFILE:
+        - Location: ${userProfile.city || 'Unknown'}, ${userProfile.province || 'South Africa'}
+        - Peak Sun Hours: ${peakSunHours}h/day
+        - Current electricity rate: R${rateInfo.rate}/kWh (${rateInfo.season})
+        - Monthly spend: R${userProfile.monthly_spend || 'Unknown'}
+        - Household size: ${userProfile.household_size || 'Unknown'}
+        - Property type: ${userProfile.property_type || 'Unknown'}
+
+        LOAD ANALYSIS:
+        - Total daily consumption: ${totalDailyKwh.toFixed(1)} kWh/day
+        - Total running watts: ${totalRunningWatts}W
+        - Total surge watts: ${totalSurgeWatts}W
+        - Devices: ${JSON.stringify(deviceList.map(d => ({ name: d.name, watts: d.watts, surge: d.surge_watts })))}
+
+        Generate 3 REALISTIC solar package options for this home.
+        Use REAL South African component pricing (2024/2025 prices).
+
+        FORMAT AS JSON ONLY:
+        {
+          "packages": [
+            {
+              "tier": "Essential",
+              "description": "What this covers",
+              "devices_covered": ["list of devices"],
+              "inverter": "Brand/type and size",
+              "inverter_cost": "R##,###",
+              "panels": "Count x Wattage",
+              "panels_cost": "R##,###",
+              "battery": "Type and size",
+              "battery_cost": "R##,###",
+              "installation_cost": "R##,###",
+              "total_cost": "R##,### - R##,###",
+              "monthly_savings": "R#,###",
+              "payback_years": 5,
+              "recommended_for": "Load shedding backup only"
+            },
+            {
+              "tier": "Comfort",
+              "description": "...",
+              "...": "same fields"
+            },
+            {
+              "tier": "Off-Grid",
+              "description": "...",
+              "...": "same fields"
+            }
+          ]
+        }
+
+        REQUIREMENTS:
+        - Prices must be REALISTIC for SA market
+        - Essential = minimum viable (survive load shedding)
+        - Comfort = full home excluding heavy loads
+        - Off-Grid = complete energy independence
+        - Include installation costs
+        - Calculate payback based on R${rateInfo.rate}/kWh rate
+        - Reference actual component brands available in SA (e.g., Sunsynk, Deye, Canadian Solar)
+
+        Return ONLY the JSON.
+        `;
+
+        const text = await callAI(prompt);
+        console.log("Solar Quotes Response:", text);
+        return extractJSON(text);
+    } catch (error) {
+        console.error("Solar Quotes Error:", error);
+        throw new Error("Failed to generate solar quotes");
+    }
+}
+
+async function getOnboardingQuestion(currentProfile) {
+    try {
+        // Critical fields to check before "Camera Mode"
+        const requiredFields = ['monthly_spend', 'household_size', 'property_type', 'has_pool', 'work_from_home'];
+
+        // Check if we have everything
+        const missingFields = requiredFields.filter(f => !currentProfile[f] && currentProfile[f] !== false && currentProfile[f] !== 0);
+
+        if (missingFields.length === 0) {
+            return {
+                question: "That's all I need! Now comes the fun part — let's scan your appliances! 📸",
+                field: null,
+                options: [],
+                type: "done",
+                complete: true
+            };
+        }
+
+        const prompt = `
+        You are an energy consultant onboarding a new user.
+        
+        Current user profile:
+        ${JSON.stringify(currentProfile)}
+
+        Fields to fill (IN ORDER OF PRIORITY):
+        1. monthly_spend (Rands) - NEVER ask for "monthly_budget", ONLY "monthly_spend"
+        2. household_size (1, 2, 3-4, 5+)
+        3. property_type (House, Apartment, Townhouse)
+        4. has_pool (Yes/No)
+        5. work_from_home (Yes/No)
+
+        Refuse to ask about anything else.
+        Determine which field from the list above is MISSING and ask for it.
+        
+        Format as JSON:
+        {
+          "question": "Friendly question",
+          "field": "EXACT_FIELD_NAME_FROM_LIST_ABOVE",
+          "options": ["Opt1", "Opt2"] (if applicable),
+          "type": "select" or "number" or "text",
+          "complete": false
+        }
+        
+        Return ONLY JSON.
+        `;
+
+        const text = await callAI(prompt);
+        console.log("Onboarding Question:", text);
+        return extractJSON(text);
+    } catch (error) {
+        console.error("Onboarding Question Error:", error);
+        throw new Error("Failed to get onboarding question");
+    }
+}
+
+module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion };
