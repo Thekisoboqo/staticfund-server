@@ -8,6 +8,40 @@ const multer = require('multer');
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Self-healing: Ensure DB has required columns for onboarding
+async function ensureSchema() {
+    try {
+        console.log("Checking DB schema...");
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                name VARCHAR(255),
+                province VARCHAR(100),
+                city VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        const alterQuery = `
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_spend NUMERIC(10, 2) DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS household_size VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS property_type VARCHAR(100);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS has_pool BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS work_from_home VARCHAR(10);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_fuel VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;
+        `;
+        await pool.query(alterQuery);
+        console.log("✅ DB Schema verified (onboarding columns present)");
+    } catch (err) {
+        console.error("Schema Check Failed:", err);
+    }
+}
+// Run immediately
+ensureSchema();
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
 
