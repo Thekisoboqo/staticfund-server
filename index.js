@@ -8,6 +8,40 @@ const multer = require('multer');
 const app = express();
 const PORT = process.env.PORT || 5001;
 
+// Self-healing: Ensure DB has required columns for onboarding
+async function ensureSchema() {
+    try {
+        console.log("Checking DB schema...");
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password VARCHAR(255) NOT NULL,
+                name VARCHAR(255),
+                province VARCHAR(100),
+                city VARCHAR(100),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        const alterQuery = `
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS monthly_spend NUMERIC(10, 2) DEFAULT 0;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS household_size VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS property_type VARCHAR(100);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS has_pool BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS work_from_home VARCHAR(10);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_fuel VARCHAR(50);
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;
+        `;
+        await pool.query(alterQuery);
+        console.log("✅ DB Schema verified (onboarding columns present)");
+    } catch (err) {
+        console.error("Schema Check Failed:", err);
+    }
+}
+// function definition remains, removing the call
+
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' })); // Increase limit for base64 images
 
@@ -358,6 +392,35 @@ app.post('/api/gemini/scan', async (req, res) => {
     }
 });
 
+// Update a specific profile field (used during chat onboarding)
+app.put('/api/users/profile-field', async (req, res) => {
+    const { userId, field, value } = req.body;
+    if (!userId || !field) {
+        return res.status(400).json({ error: 'Missing field or userId' });
+    }
+
+    try {
+        // Allow list of valid fields to prevent SQL injection or bad data
+        const validFields = ['city', 'province', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'name'];
+        if (!validFields.includes(field)) {
+            return res.status(400).json({ error: `Invalid field: ${field}` });
+        }
+
+        // Construct query safely
+        const query = `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING *`;
+        const result = await pool.query(query, [value, userId]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        res.json({ success: true, user: result.rows[0] });
+    } catch (err) {
+        console.error("Profile Update Error:", err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Gemini: AI Tips (time-aware + location-aware)
 app.post('/api/gemini/tips', async (req, res) => {
     const { devices, userId } = req.body;
@@ -607,6 +670,9 @@ app.post('/api/gemini/interview', async (req, res) => {
     }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+// Start server only after schema check
+ensureSchema().then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on port ${PORT}`);
+    });
 });

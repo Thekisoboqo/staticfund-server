@@ -129,41 +129,41 @@ async function getEnergyTips(deviceList, userProfile = {}) {
 
         CRITICAL RULES:
         - Analyze ONLY the devices listed above. Do NOT hallucinate devices.
-        - Include SPECIFIC TIMES for switching devices ON/OFF
-        - Factor in the current SEASON (${season}) for heating/cooling advice
-        - Use the ACTUAL rate of R${userRate}/kWh in all calculations
+        - **BE EXTREMELY SPECIFIC WITH TIMES.** Do not say "during the day". Say "between 10:00 and 14:00".
+        - **GEYSER:** Rule of thumb -> OFF at 06:00, ON at 16:00 (or similar based on usage).
+        - **POOL PUMP:** Rule of thumb -> 4 hours in winter, 6 hours in summer.
+        - **FRIDGE:** Rule of thumb -> Set to 4°C.
+        - Factor in the current SEASON (${season}) for heating/cooling advice.
+        - Use the ACTUAL rate of R${userRate}/kWh in all calculations.
 
         FORMAT YOUR RESPONSE AS JSON ONLY (no markdown):
         {
           "tips": [
             {
-              "title": "Technical title",
-              "description": "Detailed explanation with calculations using R${userRate}/kWh rate",
+              "title": "Specific Action Title",
+              "description": "Detailed advice. E.g. 'Run your pool pump for exactly 4 hours between 10:00 and 14:00.'",
               "potential_savings": "R###/month",
               "implementation_steps": ["Step 1", "Step 2", "Step 3"],
               "priority": "HIGH/MEDIUM/LOW",
-              "payback_period": "X months"
+              "payback_period": "Immediate"
             }
           ],
           "schedules": [
             {
-              "device_name": "Exact device name from inventory",
+              "device_name": "Device Name",
               "turn_on": "HH:MM",
               "turn_off": "HH:MM",
-              "reason": "Why this schedule saves money",
+              "reason": "Why this specific time window saves money",
               "estimated_daily_saving": "R##"
             }
           ]
         }
 
         REQUIREMENTS:
-        - Every device that can be scheduled MUST have a schedule entry
-        - Fridges: recommend thermostat settings, NOT turning off
-        - Geysers: give specific timer ON/OFF times
-        - Washing machines, dishwashers: recommend off-peak usage windows
-        - Lights: recommend sunset/sunrise schedules
-        - Calculate savings using R${userRate}/kWh
-        - Be specific with times (e.g., "06:00" not "morning")
+        - Every heavy device (Geyser, Pool Pump, Heater, AC) MUST have a schedule entry.
+        - Fridges: recommend thermostat settings in the tips section.
+        - Washing machines, dishwashers: recommend off-peak usage windows (22:00 - 06:00).
+        - Calculate savings using R${userRate}/kWh.
         
         Return ONLY the JSON object.
         `;
@@ -377,44 +377,49 @@ async function getSmartSolarQuotes(deviceList, userProfile = {}) {
 
 async function getOnboardingQuestion(currentProfile) {
     try {
+        // Critical fields to check before "Camera Mode"
+        const requiredFields = ['city', 'province', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'work_from_home'];
+
+        // Check if we have everything
+        const missingFields = requiredFields.filter(f => !currentProfile[f] && currentProfile[f] !== false && currentProfile[f] !== 0);
+
+        if (missingFields.length === 0) {
+            return {
+                question: "That's all I need! Now comes the fun part — let's scan your appliances! 📸",
+                field: null,
+                options: [],
+                type: "done",
+                complete: true
+            };
+        }
+
         const prompt = `
-        You are an energy consultant onboarding a new user for a South African energy saving app.
+        You are an energy consultant onboarding a new user.
         
-        Current user profile (what we already know):
+        Current user profile:
         ${JSON.stringify(currentProfile)}
 
-        Fields we need to fill:
-        - name (string)
-        - monthly_spend (number - monthly electricity in Rands)
-        - household_size (string - "1", "2", "3-4", "5+")
-        - property_type (string - "house", "apartment", "townhouse")
-        - has_pool (boolean)
-        - cooking_fuel (string - "electric", "gas", "both")
-        - work_from_home (string - "yes", "sometimes", "no")
+        Fields to fill (IN ORDER OF PRIORITY):
+        1. city (Text) - If missing, ask "Which city or town do you live in?"
+        2. province (Select: Gauteng, Western Cape, KwaZulu-Natal, Eastern Cape, Free State, Limpopo, Mpumalanga, North West, Northern Cape)
+        3. monthly_spend (Rands) - Ask "Roughly how much do you spend on electricity per month?" (NEVER ask for "monthly_budget")
+        4. household_size (1, 2, 3-4, 5+)
+        5. property_type (House, Apartment, Townhouse)
+        6. has_pool (Yes/No)
+        7. work_from_home (Yes/No)
 
-        NOTE: Do NOT ask about province or city — the app automatically detects location via GPS.
-
-        Look at what is already filled and ask the NEXT most useful question.
-        Be friendly and conversational, like chatting with a neighbor.
+        Refuse to ask about anything else.
+        Determine which field from the list above is MISSING and ask for it.
         
         Format as JSON:
         {
-          "question": "Your friendly question text",
-          "field": "the_database_field_name",
-          "options": ["Option 1", "Option 2", "Option 3"],
-          "type": "select" or "text" or "number",
+          "question": "Friendly question",
+          "field": "EXACT_FIELD_NAME_FROM_LIST_ABOVE",
+          "options": ["Opt1", "Opt2"] (if applicable),
+          "type": "select" or "number" or "text",
           "complete": false
         }
-
-        If ALL fields are filled, return:
-        {
-          "question": "Great! I have everything I need to give you amazing energy insights!",
-          "field": null,
-          "options": [],
-          "type": "done",
-          "complete": true
-        }
-
+        
         Return ONLY JSON.
         `;
 
