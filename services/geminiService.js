@@ -428,6 +428,32 @@ async function getOnboardingQuestion(currentProfile) {
         return extractJSON(text);
     } catch (error) {
         console.error("Onboarding Question Error:", error);
+
+        // Fallback: If AI fails (e.g. API key issue), ask manually based on currentProfile
+        const fallbackFields = {
+            city: "Which city or town do you live in?",
+            province: "In which province is your home located?",
+            monthly_spend: "Roughly how much do you spend on electricity per month?",
+            household_size: "How many people live in your household?",
+            property_type: "What type of property do you live in? (House, Apartment, etc.)",
+            has_pool: "Does your home have a swimming pool?",
+            work_from_home: "Do you or anyone in your house work from home?"
+        };
+
+        const firstMissing = missingFields[0];
+        if (firstMissing && fallbackFields[firstMissing]) {
+            console.log("Using fallback question for:", firstMissing);
+            return {
+                question: fallbackFields[firstMissing],
+                field: firstMissing,
+                options: (firstMissing === 'has_pool' || firstMissing === 'work_from_home') ? ["Yes", "No"] :
+                    (firstMissing === 'household_size') ? ["1", "2", "3-4", "5+"] :
+                        (firstMissing === 'property_type') ? ["House", "Apartment", "Townhouse"] : [],
+                type: (['has_pool', 'work_from_home', 'household_size', 'property_type'].includes(firstMissing)) ? "select" : "text",
+                complete: false
+            };
+        }
+
         throw new Error("Failed to get onboarding question");
     }
 }
