@@ -103,69 +103,67 @@ async function getEnergyTips(deviceList, userProfile = {}) {
         const municipality = userProfile.municipality || userProfile.city || 'Unknown';
 
         const prompt = `
-        You are a Senior Electrical Engineer and Energy Consultant with 20+ years of experience in South African residential energy systems.
+        You are the Tips, Recommendation & Analysis Agent — a Senior Energy Consultant in South Africa.
 
-        CONTEXT:
-        - Current time: ${now.toLocaleTimeString('en-ZA')}
-        - Current date: ${now.toLocaleDateString('en-ZA')}
-        - Season: ${season}
-        - Current off-peak status: ${isOffPeak ? 'YES (off-peak now)' : 'NO (peak hours)'}
+        YOUR TASK: Analyze EACH appliance below individually and generate unique, personalized energy-saving tips.
+
+        === HOUSEHOLD CONTEXT ===
+        - Current date/time: ${now.toLocaleDateString('en-ZA')} ${now.toLocaleTimeString('en-ZA')}
+        - Season: ${userProfile.season || season} (Feb is SUMMER in SA)
         - User location: ${municipality}, ${userProfile.province || 'South Africa'}
-        - Electricity rate: R${userRate}/kWh
-        - Household size: ${userProfile.household_size || 'Unknown'}
-        - Property type: ${userProfile.property_type || 'Unknown'}
-        - Has pool: ${userProfile.has_pool ? 'Yes' : 'No'}
-        - Cooking fuel: ${userProfile.cooking_fuel || 'Unknown'}
-        - Works from home: ${userProfile.work_from_home || 'Unknown'}
+        - Electricity distributor: ${userProfile.distributor || municipality}
+        - Effective rate: R${userRate}/kWh
+        ${userProfile.isIBT ? `- TARIFF (Inclining Block - ${userProfile.distributor}):
+          Block 1: R${userProfile.block1_rate}/kWh for 0-${userProfile.block1_limit} kWh
+          Block 2: R${userProfile.block2_summer}/kWh (summer) / R${userProfile.block2_winter}/kWh (winter) above ${userProfile.block1_limit} kWh
+          ⚡ KEY INSIGHT: If household drops below ${userProfile.block1_limit} kWh/month, EVERY unit costs only R${userProfile.block1_rate} instead of R${userProfile.block2_summer}+!` : `- Flat rate: R${userRate}/kWh`}
+        - Household: ${userProfile.household_size || '?'} people, ${userProfile.property_type || 'Unknown'} type
+        - Pool: ${userProfile.has_pool ? 'YES' : 'No'} | Cooking fuel: ${userProfile.cooking_fuel || '?'} | WFH: ${userProfile.work_from_home || '?'}
+        - Monthly spend: R${userProfile.monthly_spend || '?'}
+        - Peak sun hours: ${userProfile.peakSunHours || 5.0}h/day
 
-        SA OFF-PEAK HOURS (Eskom TOU):
-        - Off-peak: 22:00 - 06:00 (weekdays), All weekend
-        - Standard: 09:00 - 17:00 (weekdays)  
-        - Peak: 06:00 - 09:00 and 17:00 - 22:00 (weekdays)
-        - Winter peak rates are ~3x off-peak rates
+        === SA OFF-PEAK HOURS ===
+        Off-peak: 22:00-06:00 weekdays, all weekend
+        Peak: 06:00-09:00 & 17:00-22:00 weekdays
+        Standard: 09:00-17:00 weekdays
 
-        Analyze these devices:
-        ${JSON.stringify(deviceList)}
+        === APPLIANCES TO ANALYZE (one by one) ===
+        ${deviceList.map((d, i) => `${i + 1}. ${d.name} — ${d.watts}W, used ${d.hours_per_day || 0}h/day, ${d.days_per_week || 7} days/week → ${((d.watts * (d.hours_per_day || 0) * (d.days_per_week || 7)) / (7 * 1000)).toFixed(2)} kWh/day → R${((d.watts * (d.hours_per_day || 0) * (d.days_per_week || 7) * userRate) / (7 * 1000) * 30).toFixed(0)}/month`).join('\n        ')}
 
-        CRITICAL RULES:
-        - Analyze ONLY the devices listed above. Do NOT hallucinate devices.
-        - **BE EXTREMELY SPECIFIC WITH TIMES.** Do not say "during the day". Say "between 10:00 and 14:00".
-        - **GEYSER:** Rule of thumb -> OFF at 06:00, ON at 16:00 (or similar based on usage).
-        - **POOL PUMP:** Rule of thumb -> 4 hours in winter, 6 hours in summer.
-        - **FRIDGE:** Rule of thumb -> Set to 4°C.
-        - Factor in the current SEASON (${season}) for heating/cooling advice.
-        - Use the ACTUAL rate of R${userRate}/kWh in all calculations.
+        === MANDATORY RULES ===
+        1. Generate AT LEAST one unique tip for EVERY appliance listed above. Reference the device by name.
+        2. Show your math: "Your [Device] uses [X]W × [Y]h = [Z] kWh/day → R[cost]/month at R${userRate}/kWh"
+        3. Be SPECIFIC with times: "Turn off at 08:00" not "during the day"
+        4. ${userProfile.isIBT ? `Highlight the Block 1 vs Block 2 threshold: "If you reduce by X kWh, you drop to Block 1 at R${userProfile.block1_rate}/kWh"` : 'Calculate savings using the flat rate'}
+        5. Factor in SEASON = ${userProfile.season || season}: In summer recommend less heating, more ventilation; In winter recommend geyser blankets, insulation
+        6. DO NOT invent appliances not in the list. DO NOT give generic tips.
+        7. Every device over 500W MUST have a schedule entry with exact ON/OFF times.
 
-        FORMAT YOUR RESPONSE AS JSON ONLY (no markdown):
+        === RESPONSE FORMAT (JSON ONLY, no markdown) ===
         {
           "tips": [
             {
-              "title": "Specific Action Title",
-              "description": "Detailed advice. E.g. 'Run your pool pump for exactly 4 hours between 10:00 and 14:00.'",
+              "title": "[Device Name]: Specific Action",
+              "description": "Personalized advice with math. E.g. Your Geyser uses 3000W × 8h = 24 kWh/day...",
               "potential_savings": "R###/month",
               "implementation_steps": ["Step 1", "Step 2", "Step 3"],
               "priority": "HIGH/MEDIUM/LOW",
-              "payback_period": "Immediate"
+              "device_name": "Exact device name from list",
+              "payback_period": "Immediate/1 week/1 month"
             }
           ],
           "schedules": [
             {
-              "device_name": "Device Name",
+              "device_name": "Exact device name",
               "turn_on": "HH:MM",
               "turn_off": "HH:MM",
-              "reason": "Why this specific time window saves money",
+              "reason": "Why this time window saves money (reference rate/tariff)",
               "estimated_daily_saving": "R##"
             }
           ]
         }
 
-        REQUIREMENTS:
-        - Every heavy device (Geyser, Pool Pump, Heater, AC) MUST have a schedule entry.
-        - Fridges: recommend thermostat settings in the tips section.
-        - Washing machines, dishwashers: recommend off-peak usage windows (22:00 - 06:00).
-        - Calculate savings using R${userRate}/kWh.
-        
-        Return ONLY the JSON object.
+        Return ONLY the JSON.
         `;
 
         const text = await callAI(prompt);

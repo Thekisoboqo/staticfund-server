@@ -457,6 +457,20 @@ app.post('/api/gemini/tips', async (req, res) => {
                 const rateInfo = rates.getRate(profile.city || profile.province);
                 userProfile.rate_per_kwh = rateInfo.rate;
                 userProfile.municipality = rateInfo.municipality;
+                userProfile.distributor = rateInfo.distributor || rateInfo.municipality;
+                userProfile.isIBT = rateInfo.isIBT || false;
+                // Pass IBT block info if available (for Centlec etc.)
+                if (rateInfo.rates.block1) {
+                    userProfile.block1_rate = rateInfo.rates.block1;
+                    userProfile.block1_limit = rateInfo.rates.block1_limit;
+                    userProfile.block2_summer = rateInfo.rates.block2_summer;
+                    userProfile.block2_winter = rateInfo.rates.block2_winter;
+                }
+                // Pass seasonal info
+                const seasonalInfo = rates.getSeasonalRate(profile.city || profile.province);
+                userProfile.season = seasonalInfo.season;
+                userProfile.seasonalRate = seasonalInfo.seasonalRate;
+                userProfile.peakSunHours = rates.getPeakSunHours(profile.province);
             }
         }
 
