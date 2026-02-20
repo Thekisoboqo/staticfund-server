@@ -62,17 +62,36 @@ function extractJSON(text) {
 async function analyzeDeviceImage(imageBuffer, mimeType) {
     try {
         const prompt = `
-        Analyze this image of an electrical device. 
-        Identify the device type and estimate its power consumption details.
-        Return ONLY a JSON object with the following fields:
-        - name: (string) A short, descriptive name (e.g., "Kettle", "LED Bulb").
-        - watts: (number) Estimated running wattage.
-        - surge_watts: (number) Estimated surge wattage (0 if none).
-        - hours_per_day: (number) Estimated average daily usage in hours (e.g., 0.5 for a kettle).
-        - days_per_week: (number) Estimated usage days per week (usually 7).
-        
-        If you cannot identify the device, make a best guess based on similar looking appliances.
-        Do not include markdown formatting like \`\`\`json. Just the raw JSON string.
+        You are an expert South African appliance identification AI. Analyze this image carefully.
+
+        YOUR PROCESS:
+        1. LOOK for any visible text: brand name, model number, nameplate, sticker, labels
+        2. IDENTIFY the exact brand and model if possible (e.g., "Samsung RT38K5062SL", "Russell Hobbs RHKC1", "Defy DMO 367")
+        3. If you can identify the brand/model, USE YOUR KNOWLEDGE of that exact model's specifications for wattage
+        4. If you cannot see the brand/model, identify the TYPE of appliance and use typical South African wattage for that type
+        5. Estimate realistic daily usage hours based on the appliance type in a typical SA household
+
+        COMMON SA APPLIANCE WATTAGES (use these as fallback):
+        - Geyser: 2000-3000W | Kettle: 1800-2200W | Stove plate: 1500-2000W
+        - Microwave: 800-1200W | Iron: 1000-1500W | Washing machine: 500-800W
+        - Fridge/Freezer: 100-200W | TV (LED): 50-150W | TV (older): 150-300W
+        - PC/Laptop: 50-300W | Router/WiFi: 10-20W | Phone charger: 5-15W
+        - Pool pump: 750-1500W | Heater: 1500-2500W | Air con: 1000-2500W
+        - LED bulb: 5-15W | Ceiling fan: 50-75W | Dishwasher: 1200-1800W
+
+        Return ONLY a JSON object:
+        {
+            "name": "Brand Model (Type)" or just "Type" if brand unknown — e.g. "Samsung RT38 Fridge" or "Electric Kettle",
+            "watts": exact_number_not_range,
+            "surge_watts": number_or_0,
+            "hours_per_day": realistic_daily_hours,
+            "days_per_week": typical_days,
+            "brand": "Brand if visible" or null,
+            "model": "Model if visible" or null,
+            "confidence": "HIGH" if brand/model identified, "MEDIUM" if type identified, "LOW" if guessing
+        }
+
+        IMPORTANT: Do NOT include markdown formatting. Return ONLY the raw JSON.
         `;
 
         const text = await callAI(prompt, {
