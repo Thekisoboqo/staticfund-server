@@ -32,9 +32,26 @@ async function ensureSchema() {
             ALTER TABLE users ADD COLUMN IF NOT EXISTS work_from_home VARCHAR(10);
             ALTER TABLE users ADD COLUMN IF NOT EXISTS cooking_fuel VARCHAR(50);
             ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN DEFAULT FALSE;
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS meter_number VARCHAR(20);
         `;
         await pool.query(alterQuery);
-        console.log("✅ DB Schema verified (onboarding columns present)");
+
+        // Electricity purchases table
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS electricity_purchases (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                amount_rand NUMERIC(10,2) NOT NULL,
+                kwh_units NUMERIC(10,2) NOT NULL,
+                rate_per_kwh NUMERIC(6,3) NOT NULL,
+                purchase_date TIMESTAMP DEFAULT NOW(),
+                estimated_depletion TIMESTAMP,
+                daily_burn_kwh NUMERIC(10,2),
+                is_active BOOLEAN DEFAULT TRUE
+            );
+        `);
+
+        console.log("✅ DB Schema verified (all tables present)");
     } catch (err) {
         console.error("Schema Check Failed:", err);
     }
@@ -178,7 +195,7 @@ app.put('/api/users/onboarding', async (req, res) => {
 // Save individual profile field (used by chat onboarding)
 app.put('/api/users/profile-field', async (req, res) => {
     const { userId, field, value } = req.body;
-    const allowedFields = ['household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'province', 'city', 'monthly_spend', 'monthly_budget', 'latitude', 'longitude'];
+    const allowedFields = ['name', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'province', 'city', 'monthly_spend', 'monthly_budget', 'latitude', 'longitude'];
 
     if (!allowedFields.includes(field)) {
         return res.status(400).json({ error: `Field '${field}' is not allowed` });
@@ -202,25 +219,7 @@ app.put('/api/users/profile-field', async (req, res) => {
     }
 });
 
-// Gemini: AI Onboarding - get next question
-app.post('/api/gemini/onboard', async (req, res) => {
-    const { userId } = req.body;
-
-    try {
-        // Fetch user profile to see what fields are missing
-        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        const userProfile = userResult.rows[0];
-        const result = await getOnboardingQuestion(userProfile);
-        res.json(result);
-    } catch (err) {
-        console.error('Onboarding AI error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// NOTE: /api/gemini/onboard is defined below (near line 565) — single handler
 
 // --- DEVICE ENDPOINTS ---
 
@@ -407,34 +406,7 @@ app.post('/api/gemini/scan', async (req, res) => {
     }
 });
 
-// Update a specific profile field (used during chat onboarding)
-app.put('/api/users/profile-field', async (req, res) => {
-    const { userId, field, value } = req.body;
-    if (!userId || !field) {
-        return res.status(400).json({ error: 'Missing field or userId' });
-    }
-
-    try {
-        // Allow list of valid fields to prevent SQL injection or bad data
-        const validFields = ['city', 'province', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home', 'name'];
-        if (!validFields.includes(field)) {
-            return res.status(400).json({ error: `Invalid field: ${field}` });
-        }
-
-        // Construct query safely
-        const query = `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING *`;
-        const result = await pool.query(query, [value, userId]);
-
-        if (result.rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        res.json({ success: true, user: result.rows[0] });
-    } catch (err) {
-        console.error("Profile Update Error:", err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// NOTE: /api/users/profile-field is defined above (near line 179) — single handler
 
 // Gemini: AI Tips (time-aware + location-aware)
 app.post('/api/gemini/tips', async (req, res) => {
@@ -580,26 +552,7 @@ app.post('/api/gemini/onboard', async (req, res) => {
     }
 });
 
-// Onboarding: Update single field
-app.put('/api/users/profile-field', async (req, res) => {
-    const { userId, field, value } = req.body;
-    const allowedFields = ['name', 'province', 'city', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'cooking_fuel', 'work_from_home'];
-
-    if (!allowedFields.includes(field)) {
-        return res.status(400).json({ error: 'Invalid field' });
-    }
-
-    try {
-        const result = await pool.query(
-            `UPDATE users SET ${field} = $1 WHERE id = $2 RETURNING id, email, name, province, city, household_size, property_type, has_pool, cooking_fuel, work_from_home, monthly_spend, onboarding_completed`,
-            [value, userId]
-        );
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// NOTE: /api/users/profile-field is defined above (near line 179) — single handler
 
 // Gamification: Update Monthly Budget
 app.put('/api/users/budget', async (req, res) => {
@@ -695,6 +648,215 @@ app.post('/api/gemini/interview', async (req, res) => {
         res.json(result); // Returns { question, suggested_device } or null
     } catch (err) {
         console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- ELECTRICITY METER TRACKING ---
+
+// Save meter number
+app.put('/api/users/meter', async (req, res) => {
+    const { userId, meterNumber } = req.body;
+    if (!userId || !meterNumber) return res.status(400).json({ error: 'userId and meterNumber required' });
+
+    try {
+        const result = await pool.query(
+            'UPDATE users SET meter_number = $1 WHERE id = $2 RETURNING id, meter_number',
+            [meterNumber, userId]
+        );
+        if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error('Meter save error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Log electricity purchase
+app.post('/api/electricity/purchase', async (req, res) => {
+    const { userId, amountRand } = req.body;
+    if (!userId || !amountRand) return res.status(400).json({ error: 'userId and amountRand required' });
+
+    try {
+        // Get user's city for tariff rate
+        const userRes = await pool.query('SELECT city, province FROM users WHERE id = $1', [userId]);
+        if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+        const user = userRes.rows[0];
+        const rates = require('./services/ratesDatabase');
+        const rateInfo = rates.getRate(user.city || user.province || 'Eskom Direct');
+        const ratePerKwh = rateInfo.rate;
+
+        // Calculate kWh from purchase amount
+        const kwhUnits = parseFloat((amountRand / ratePerKwh).toFixed(2));
+
+        // Get user's devices to calculate daily burn rate
+        const devicesRes = await pool.query(`
+            SELECT d.watts,
+                   COALESCE((SELECT hours_per_day FROM usage_logs WHERE device_id = d.id ORDER BY date DESC LIMIT 1), 4) as hours_per_day
+            FROM devices d WHERE d.user_id = $1
+        `, [userId]);
+
+        let dailyBurnKwh = 0;
+        devicesRes.rows.forEach(device => {
+            dailyBurnKwh += (device.watts * parseFloat(device.hours_per_day)) / 1000;
+        });
+
+        // Minimum burn rate (even without devices, assume some baseline usage)
+        if (dailyBurnKwh < 1) dailyBurnKwh = 5; // ~5 kWh/day baseline for a household
+
+        // Calculate depletion date
+        const daysRemaining = kwhUnits / dailyBurnKwh;
+        const depletionDate = new Date();
+        depletionDate.setDate(depletionDate.getDate() + daysRemaining);
+
+        // Deactivate previous purchases
+        await pool.query('UPDATE electricity_purchases SET is_active = false WHERE user_id = $1', [userId]);
+
+        // Save new purchase
+        const purchaseRes = await pool.query(`
+            INSERT INTO electricity_purchases (user_id, amount_rand, kwh_units, rate_per_kwh, estimated_depletion, daily_burn_kwh, is_active)
+            VALUES ($1, $2, $3, $4, $5, $6, true)
+            RETURNING *
+        `, [userId, amountRand, kwhUnits, ratePerKwh, depletionDate.toISOString(), dailyBurnKwh]);
+
+        res.json({
+            purchase: purchaseRes.rows[0],
+            prediction: {
+                kwhPurchased: kwhUnits,
+                ratePerKwh,
+                municipality: rateInfo.municipality,
+                dailyBurnKwh: parseFloat(dailyBurnKwh.toFixed(2)),
+                daysRemaining: parseFloat(daysRemaining.toFixed(1)),
+                depletionDate: depletionDate.toISOString(),
+                depletionFormatted: depletionDate.toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' }),
+            }
+        });
+    } catch (err) {
+        console.error('Purchase log error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get current electricity status
+app.get('/api/electricity/status', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    try {
+        // Get active purchase
+        const purchaseRes = await pool.query(
+            'SELECT * FROM electricity_purchases WHERE user_id = $1 AND is_active = true ORDER BY purchase_date DESC LIMIT 1',
+            [userId]
+        );
+
+        if (purchaseRes.rows.length === 0) {
+            return res.json({ hasPurchase: false, message: 'No electricity purchase logged yet' });
+        }
+
+        const purchase = purchaseRes.rows[0];
+        const purchaseDate = new Date(purchase.purchase_date);
+        const now = new Date();
+        const daysSincePurchase = (now.getTime() - purchaseDate.getTime()) / (1000 * 60 * 60 * 24);
+        const kwhUsed = daysSincePurchase * parseFloat(purchase.daily_burn_kwh);
+        const kwhRemaining = Math.max(0, parseFloat(purchase.kwh_units) - kwhUsed);
+        const daysRemaining = kwhRemaining / parseFloat(purchase.daily_burn_kwh);
+
+        const depletionDate = new Date();
+        depletionDate.setDate(depletionDate.getDate() + daysRemaining);
+
+        // Determine urgency level
+        let urgency = 'green';
+        if (daysRemaining <= 1) urgency = 'critical';
+        else if (daysRemaining <= 3) urgency = 'red';
+        else if (daysRemaining <= 5) urgency = 'yellow';
+
+        // Get user's meter number
+        const userRes = await pool.query('SELECT meter_number FROM users WHERE id = $1', [userId]);
+
+        res.json({
+            hasPurchase: true,
+            meterNumber: userRes.rows[0]?.meter_number || null,
+            purchase: {
+                amountRand: parseFloat(purchase.amount_rand),
+                kwhPurchased: parseFloat(purchase.kwh_units),
+                purchaseDate: purchase.purchase_date,
+                ratePerKwh: parseFloat(purchase.rate_per_kwh),
+            },
+            status: {
+                kwhRemaining: parseFloat(kwhRemaining.toFixed(1)),
+                kwhUsed: parseFloat(kwhUsed.toFixed(1)),
+                percentRemaining: parseFloat(((kwhRemaining / parseFloat(purchase.kwh_units)) * 100).toFixed(0)),
+                daysRemaining: parseFloat(daysRemaining.toFixed(1)),
+                dailyBurnKwh: parseFloat(purchase.daily_burn_kwh),
+                depletionDate: depletionDate.toISOString(),
+                depletionFormatted: depletionDate.toLocaleDateString('en-ZA', { weekday: 'long', day: 'numeric', month: 'long' }),
+                urgency,
+            }
+        });
+    } catch (err) {
+        console.error('Status error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get purchase history
+app.get('/api/electricity/history', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    try {
+        const result = await pool.query(
+            'SELECT * FROM electricity_purchases WHERE user_id = $1 ORDER BY purchase_date DESC LIMIT 10',
+            [userId]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('History error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// AI Prediction: How to extend electricity
+app.post('/api/electricity/predict', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+
+    try {
+        // Get current status
+        const purchaseRes = await pool.query(
+            'SELECT * FROM electricity_purchases WHERE user_id = $1 AND is_active = true ORDER BY purchase_date DESC LIMIT 1',
+            [userId]
+        );
+
+        if (purchaseRes.rows.length === 0) {
+            return res.json({ advice: 'Log an electricity purchase first to get predictions.' });
+        }
+
+        const purchase = purchaseRes.rows[0];
+        const daysSincePurchase = (Date.now() - new Date(purchase.purchase_date).getTime()) / (1000 * 60 * 60 * 24);
+        const kwhRemaining = Math.max(0, parseFloat(purchase.kwh_units) - (daysSincePurchase * parseFloat(purchase.daily_burn_kwh)));
+        const daysRemaining = kwhRemaining / parseFloat(purchase.daily_burn_kwh);
+
+        // Get devices
+        const devicesRes = await pool.query(`
+            SELECT d.name, d.watts,
+                   COALESCE((SELECT hours_per_day FROM usage_logs WHERE device_id = d.id ORDER BY date DESC LIMIT 1), 4) as hours_per_day
+            FROM devices d WHERE d.user_id = $1
+        `, [userId]);
+
+        const { getElectricityPrediction } = require('./services/geminiService');
+        const prediction = await getElectricityPrediction({
+            devices: devicesRes.rows,
+            kwhRemaining: parseFloat(kwhRemaining.toFixed(1)),
+            dailyBurnKwh: parseFloat(purchase.daily_burn_kwh),
+            daysRemaining: parseFloat(daysRemaining.toFixed(1)),
+            ratePerKwh: parseFloat(purchase.rate_per_kwh),
+        });
+
+        res.json(prediction);
+    } catch (err) {
+        console.error('Prediction error:', err);
         res.status(500).json({ error: err.message });
     }
 });

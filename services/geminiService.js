@@ -475,4 +475,73 @@ async function getOnboardingQuestion(currentProfile) {
     }
 }
 
-module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion };
+async function getElectricityPrediction({ devices, kwhRemaining, dailyBurnKwh, daysRemaining, ratePerKwh }) {
+    try {
+        const deviceList = devices.map(d => {
+            const dailyKwh = (d.watts * parseFloat(d.hours_per_day)) / 1000;
+            return `${d.name}: ${d.watts}W × ${d.hours_per_day}h/day = ${dailyKwh.toFixed(2)} kWh/day`;
+        }).join('\n');
+
+        const prompt = `
+        You are an Electricity Conservation AI Agent for a South African household.
+
+        CURRENT SITUATION:
+        - Remaining electricity: ${kwhRemaining} kWh
+        - Daily burn rate: ${dailyBurnKwh} kWh/day
+        - Days remaining at current usage: ${daysRemaining} days
+        - Rate: R${ratePerKwh}/kWh
+        ${daysRemaining <= 3 ? '⚠️ CRITICAL: User is about to run out of electricity!' : ''}
+
+        DEVICE BREAKDOWN (daily consumption):
+        ${deviceList}
+
+        YOUR TASK:
+        1. Analyze each device's contribution to daily burn
+        2. Identify which devices can be reduced or scheduled to EXTEND electricity
+        3. Calculate exactly how many MORE DAYS the user would get by following your advice
+        4. Be specific: "Reduce geyser from 8h to 3h → saves 15 kWh/day → extends by 3 more days"
+        5. Prioritize the BIGGEST energy consumers first
+        6. Give practical SA-specific advice (time-of-use, geyser blankets, etc.)
+
+        Return ONLY this JSON format:
+        {
+            "summary": "At current usage, your electricity will last X days. By following these tips, you can extend it to Y days.",
+            "current_days": ${daysRemaining},
+            "optimized_days": calculated_number_after_savings,
+            "daily_burn_current": ${dailyBurnKwh},
+            "daily_burn_optimized": calculated_after_reductions,
+            "recommendations": [
+                {
+                    "device": "Device name",
+                    "current_usage": "Xh/day",
+                    "recommended_usage": "Yh/day",
+                    "kwh_saved_daily": number,
+                    "days_extended": number,
+                    "action": "Specific instruction - e.g. Turn geyser off at 08:00, on at 16:00",
+                    "priority": "HIGH/MEDIUM/LOW"
+                }
+            ],
+            "emergency_tips": [
+                "If critically low: specific drastic measure to survive until payday"
+            ]
+        }
+
+        Return ONLY the JSON, no markdown.
+        `;
+
+        const text = await callAI(prompt);
+        console.log("Electricity Prediction Response:", text);
+        return extractJSON(text);
+    } catch (error) {
+        console.error("Electricity Prediction Error:", error);
+        return {
+            summary: `At current usage (~${dailyBurnKwh} kWh/day), your electricity will last approximately ${daysRemaining.toFixed(1)} days.`,
+            current_days: daysRemaining,
+            optimized_days: daysRemaining,
+            recommendations: [],
+            emergency_tips: ["Reduce geyser usage to save the most electricity."]
+        };
+    }
+}
+
+module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion, getElectricityPrediction };
