@@ -635,6 +635,25 @@ app.post('/api/meter/purchase', async (req, res) => {
     }
 });
 
+// Sync the physical meter reading
+app.post('/api/meter/sync', async (req, res) => {
+    const { homeId, userId, kwhRemaining, notes } = req.body;
+    if (!homeId || kwhRemaining === undefined) return res.status(400).json({ error: 'homeId and kwhRemaining required' });
+
+    try {
+        // Insert a special sync record. We set amount_rand = 0 because it's just a balance adjustment.
+        const result = await pool.query(`
+            INSERT INTO electricity_purchases (home_id, user_id, amount_rand, kwh_purchased, rate_per_kwh, notes)
+            VALUES ($1, $2, 0, $3, 0, $4) RETURNING *
+        `, [homeId, userId, kwhRemaining, 'SYNC_RECORD']);
+
+        res.json({ success: true, syncRecord: result.rows[0] });
+    } catch (err) {
+        console.error('Meter sync error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Get meter status: remaining kWh, daily consumption, days remaining prediction
 app.get('/api/meter/status/:homeId', async (req, res) => {
     const { homeId } = req.params;
@@ -647,13 +666,6 @@ app.get('/api/meter/status/:homeId', async (req, res) => {
         const rates = require('./services/ratesDatabase');
         const rateInfo = rates.getRate(user?.city || user?.province);
 
-        // Get total kWh purchased
-        const purchasesRes = await pool.query(
-            'SELECT COALESCE(SUM(kwh_purchased), 0)::float as total_kwh FROM electricity_purchases WHERE home_id = $1',
-            [homeId]
-        );
-        const totalPurchased = purchasesRes.rows[0].total_kwh;
-
         // Get daily consumption from all devices in this home
         const devicesRes = await pool.query(`
             SELECT COALESCE(SUM(d.watts * d.hours_per_day / 1000.0), 0)::float as daily_kwh
@@ -661,39 +673,83 @@ app.get('/api/meter/status/:homeId', async (req, res) => {
         `, [homeId]);
         const dailyConsumption = devicesRes.rows[0].daily_kwh;
 
-        // Calculate what's been consumed since first purchase
-        const firstPurchaseRes = await pool.query(
-            'SELECT MIN(purchased_at) as first_purchase FROM electricity_purchases WHERE home_id = $1',
-            [homeId]
-        );
-        const firstPurchase = firstPurchaseRes.rows[0].first_purchase;
+        // Check for the most recent SYNC_RECORD
+        const syncRes = await pool.query(`
+            SELECT kwh_purchased, purchased_at FROM electricity_purchases 
+            WHERE home_id = $1 AND notes = 'SYNC_RECORD' 
+            ORDER BY purchased_at DESC LIMIT 1
+        `, [homeId]);
+
+        let baseDate;
+        let baseKwh = 0;
+
+        if (syncRes.rows.length > 0) {
+            // We have a sync record! Use its timestamp and kWh as the baseline.
+            baseDate = syncRes.rows[0].purchased_at;
+            baseKwh = syncRes.rows[0].kwh_purchased;
+
+            // Add any purchases made AFTER the sync date
+            const recentPurchases = await pool.query(`
+                SELECT COALESCE(SUM(kwh_purchased), 0)::float as recent_kwh 
+                FROM electricity_purchases 
+                WHERE home_id = $1 AND notes != 'SYNC_RECORD' AND purchased_at > $2
+            `, [homeId, baseDate]);
+            baseKwh += recentPurchases.rows[0].recent_kwh;
+        } else {
+            // No sync record. Fall back to the very first purchase date.
+            const firstPurchaseRes = await pool.query(
+                "SELECT MIN(purchased_at) as first_purchase FROM electricity_purchases WHERE home_id = $1 AND notes != 'SYNC_RECORD'",
+                [homeId]
+            );
+            baseDate = firstPurchaseRes.rows[0].first_purchase;
+
+            // Get all normal purchases
+            const allPurchases = await pool.query(
+                "SELECT COALESCE(SUM(kwh_purchased), 0)::float as total_kwh FROM electricity_purchases WHERE home_id = $1 AND notes != 'SYNC_RECORD'",
+                [homeId]
+            );
+            baseKwh = allPurchases.rows[0].total_kwh;
+        }
 
         let daysElapsed = 0;
         let estimatedConsumed = 0;
-        let kwhRemaining = totalPurchased;
+        let kwhRemaining = baseKwh;
         let daysRemaining = 0;
         let percentRemaining = 100;
+        let totalPurchased = baseKwh; // Define for fallback calculations
 
-        if (firstPurchase && dailyConsumption > 0) {
-            daysElapsed = Math.max(1, Math.floor((Date.now() - new Date(firstPurchase).getTime()) / (1000 * 60 * 60 * 24)));
+        if (baseDate && dailyConsumption > 0) {
+            daysElapsed = Math.max(0, (Date.now() - new Date(baseDate).getTime()) / (1000 * 60 * 60 * 24));
             estimatedConsumed = dailyConsumption * daysElapsed;
-            kwhRemaining = Math.max(0, totalPurchased - estimatedConsumed);
-            daysRemaining = dailyConsumption > 0 ? Math.floor(kwhRemaining / dailyConsumption) : 999;
-            percentRemaining = totalPurchased > 0 ? Math.max(0, Math.min(100, Math.round((kwhRemaining / totalPurchased) * 100))) : 100;
+            kwhRemaining = Math.max(0, baseKwh - estimatedConsumed);
+            daysRemaining = dailyConsumption > 0 ? kwhRemaining / dailyConsumption : 999;
+            percentRemaining = totalPurchased > 0 ? Math.min(100, Math.max(0, (kwhRemaining / totalPurchased) * 100)) : 100;
         } else if (dailyConsumption === 0 && totalPurchased > 0) {
-            // No devices scanned yet — can't predict
             kwhRemaining = totalPurchased;
-            daysRemaining = -1; // means "unknown — scan devices to predict"
+            daysRemaining = -1;
         }
 
-        // Get home info for meter number
         const homeRes = await pool.query('SELECT meter_number FROM homes WHERE id = $1', [homeId]);
 
-        // Get last 3 purchases for quick context
-        const recentRes = await pool.query(
-            'SELECT amount_rand, kwh_purchased, purchased_at FROM electricity_purchases WHERE home_id = $1 ORDER BY purchased_at DESC LIMIT 3',
+        const historyRes = await pool.query(
+            "SELECT * FROM electricity_purchases WHERE home_id = $1 AND notes != 'SYNC_RECORD' ORDER BY purchased_at DESC LIMIT 5",
             [homeId]
         );
+
+        res.json({
+            meterNumber: homeRes.rows[0]?.meter_number || null,
+            totalPurchasedKwh: baseKwh,
+            dailyConsumptionKwh: dailyConsumption,
+            estimatedConsumedKwh: parseFloat(estimatedConsumed.toFixed(2)),
+            kwhRemaining: parseFloat(kwhRemaining.toFixed(2)),
+            daysRemaining: Math.floor(daysRemaining),
+            percentRemaining: Math.round(percentRemaining),
+            dailyCostRand: parseFloat((dailyConsumption * rateInfo.rate).toFixed(2)),
+            ratePerKwh: rateInfo.rate,
+            municipality: rateInfo.municipality,
+            daysElapsed: Math.round(daysElapsed),
+            recentPurchases: historyRes.rows,
+        });
 
         res.json({
             meterNumber: homeRes.rows[0]?.meter_number || null,

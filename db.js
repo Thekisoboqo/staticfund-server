@@ -112,6 +112,13 @@ async function initDB() {
 
         // Add missing V2 columns to V1 tables using try-catch blocks to ignore 'column already exists' errors
         const alters = [
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS code VARCHAR(10)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS city VARCHAR(100)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS province VARCHAR(100)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS latitude NUMERIC(10,7)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS longitude NUMERIC(10,7)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT",
+            "ALTER TABLE homes ADD COLUMN IF NOT EXISTS share_code VARCHAR(8)",
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS name VARCHAR(100) DEFAULT 'My Home'",
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS monthly_budget NUMERIC(10,2)",
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS budget_remaining NUMERIC(10,2)",
@@ -121,13 +128,17 @@ async function initDB() {
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS days_per_week INTEGER DEFAULT 7",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS image_thumbnail TEXT",
-            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_confidence VARCHAR(10)",
-            "ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT"
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_confidence VARCHAR(10)"
         ];
 
         for (const query of alters) {
             try { await pool.query(query); } catch (e) { /* ignore if already exists */ }
         }
+
+        // Apply unique constraints safely
+        try { await pool.query("ALTER TABLE users ADD CONSTRAINT users_code_key UNIQUE (code)"); } catch (e) { }
+        try { await pool.query("ALTER TABLE homes ADD CONSTRAINT homes_share_code_key UNIQUE (share_code)"); } catch (e) { }
+
         console.log('✅ V2 columns verified on legacy tables');
 
     } catch (err) {
