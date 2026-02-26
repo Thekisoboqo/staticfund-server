@@ -123,6 +123,7 @@ async function initDB() {
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS monthly_budget NUMERIC(10,2)",
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS budget_remaining NUMERIC(10,2)",
             "ALTER TABLE homes ADD COLUMN IF NOT EXISTS meter_number VARCHAR(20)",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS brand VARCHAR(100)",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
