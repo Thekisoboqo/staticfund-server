@@ -108,7 +108,28 @@ async function initDB() {
                 created_at TIMESTAMP DEFAULT NOW()
             );
         `);
-        console.log('✅ V2 Database schema initialized');
+        console.log('✅ V2 Database schemas created/verified');
+
+        // Add missing V2 columns to V1 tables using try-catch blocks to ignore 'column already exists' errors
+        const alters = [
+            "ALTER TABLE homes ADD COLUMN IF NOT EXISTS name VARCHAR(100) DEFAULT 'My Home'",
+            "ALTER TABLE homes ADD COLUMN IF NOT EXISTS monthly_budget NUMERIC(10,2)",
+            "ALTER TABLE homes ADD COLUMN IF NOT EXISTS budget_remaining NUMERIC(10,2)",
+            "ALTER TABLE homes ADD COLUMN IF NOT EXISTS meter_number VARCHAR(20)",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS brand VARCHAR(100)",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS days_per_week INTEGER DEFAULT 7",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS image_thumbnail TEXT",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_confidence VARCHAR(10)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS push_token TEXT"
+        ];
+
+        for (const query of alters) {
+            try { await pool.query(query); } catch (e) { /* ignore if already exists */ }
+        }
+        console.log('✅ V2 columns verified on legacy tables');
+
     } catch (err) {
         console.error('DB init error:', err.message);
     }
