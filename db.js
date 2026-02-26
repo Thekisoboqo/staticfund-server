@@ -139,6 +139,11 @@ async function initDB() {
         try { await pool.query("ALTER TABLE users ADD CONSTRAINT users_code_key UNIQUE (code)"); } catch (e) { }
         try { await pool.query("ALTER TABLE homes ADD CONSTRAINT homes_share_code_key UNIQUE (share_code)"); } catch (e) { }
 
+        // Remove legacy V1 constraints that break V2 auto-creation
+        try { await pool.query("ALTER TABLE users ALTER COLUMN email DROP NOT NULL"); } catch (e) { }
+        try { await pool.query("ALTER TABLE users ALTER COLUMN password DROP NOT NULL"); } catch (e) { }
+        try { await pool.query("ALTER TABLE users ALTER COLUMN name DROP NOT NULL"); } catch (e) { }
+
         console.log('✅ V2 columns verified on legacy tables');
 
     } catch (err) {
