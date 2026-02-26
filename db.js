@@ -6,53 +6,109 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// Initialize tables
+// V2 Schema — no auth, rooms, co-living, RAG
 async function initDB() {
     try {
         await pool.query(`
+            -- Users: location-based, no auth
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                name TEXT,
-                province TEXT,
-                city TEXT,
-                monthly_spend REAL DEFAULT 0,
-                monthly_budget REAL,
-                household_size TEXT,
-                property_type TEXT,
-                has_pool BOOLEAN DEFAULT false,
-                cooking_fuel TEXT,
-                work_from_home TEXT,
-                latitude REAL,
-                longitude REAL,
-                onboarding_completed BOOLEAN DEFAULT false,
+                code VARCHAR(10) UNIQUE NOT NULL,
+                city VARCHAR(100),
+                province VARCHAR(100),
+                latitude NUMERIC(10,7),
+                longitude NUMERIC(10,7),
+                push_token TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             );
 
+            -- Homes: shared spaces for co-living
+            CREATE TABLE IF NOT EXISTS homes (
+                id SERIAL PRIMARY KEY,
+                share_code VARCHAR(8) UNIQUE NOT NULL,
+                name VARCHAR(100) DEFAULT 'My Home',
+                created_by INTEGER REFERENCES users(id),
+                monthly_budget NUMERIC(10,2),
+                budget_remaining NUMERIC(10,2),
+                meter_number VARCHAR(20),
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- Home members
+            CREATE TABLE IF NOT EXISTS home_members (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                role VARCHAR(20) DEFAULT 'member',
+                joined_at TIMESTAMP DEFAULT NOW(),
+                UNIQUE(home_id, user_id)
+            );
+
+            -- Rooms
+            CREATE TABLE IF NOT EXISTS rooms (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                name VARCHAR(50) NOT NULL,
+                icon VARCHAR(30) DEFAULT 'cube-outline',
+                created_by INTEGER REFERENCES users(id),
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- Devices (appliances)
             CREATE TABLE IF NOT EXISTS devices (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id),
-                name TEXT NOT NULL,
-                watts REAL NOT NULL,
-                quantity INTEGER DEFAULT 1,
-                hours_per_day REAL DEFAULT 0,
-                category TEXT,
-                surge_watts REAL,
-                image_uri TEXT,
+                room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id),
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                name VARCHAR(100) NOT NULL,
+                brand VARCHAR(100),
+                model VARCHAR(100),
+                watts INTEGER NOT NULL,
+                hours_per_day NUMERIC(4,1) DEFAULT 4,
+                days_per_week INTEGER DEFAULT 7,
+                image_thumbnail TEXT,
+                ai_confidence VARCHAR(10),
                 created_at TIMESTAMP DEFAULT NOW()
             );
 
-            CREATE TABLE IF NOT EXISTS quotations (
+            -- Shared appliance knowledge base (RAG)
+            CREATE TABLE IF NOT EXISTS appliance_knowledge (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id),
-                package_tier TEXT NOT NULL,
-                package_data TEXT,
-                status TEXT DEFAULT 'pending',
+                name VARCHAR(100) NOT NULL,
+                brand VARCHAR(100),
+                model VARCHAR(100),
+                watts INTEGER NOT NULL,
+                category VARCHAR(50),
+                times_confirmed INTEGER DEFAULT 1,
+                avg_hours_per_day NUMERIC(4,1),
+                region VARCHAR(100),
+                created_at TIMESTAMP DEFAULT NOW(),
+                updated_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- Chat messages for AI consultant
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                role VARCHAR(10) NOT NULL,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+
+            -- Electricity purchases for meter tracking
+            CREATE TABLE IF NOT EXISTS electricity_purchases (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id),
+                amount_rand NUMERIC(10,2) NOT NULL,
+                kwh_purchased NUMERIC(10,2) NOT NULL,
+                rate_per_kwh NUMERIC(6,2) NOT NULL,
+                notes TEXT,
+                purchased_at TIMESTAMP DEFAULT NOW(),
                 created_at TIMESTAMP DEFAULT NOW()
             );
         `);
-        console.log('PostgreSQL tables initialized');
+        console.log('✅ V2 Database schema initialized');
     } catch (err) {
         console.error('DB init error:', err.message);
     }

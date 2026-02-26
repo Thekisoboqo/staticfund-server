@@ -9,8 +9,15 @@ const MODEL = 'qwen/qwen-2.5-vl-72b-instruct';
 async function callAI(prompt, options = {}) {
     const messages = [];
 
+    if (options.systemPrompt) {
+        messages.push({ role: 'system', content: options.systemPrompt });
+    }
+
+    if (options.history) {
+        messages.push(...options.history);
+    }
+
     if (options.imageBase64 && options.mimeType) {
-        // Vision request with image
         messages.push({
             role: 'user',
             content: [
@@ -38,8 +45,8 @@ async function callAI(prompt, options = {}) {
         body: JSON.stringify({
             model: MODEL,
             messages,
-            temperature: 0.7,
-            max_tokens: 2000,
+            temperature: options.temperature || 0.7,
+            max_tokens: options.maxTokens || 2000,
         })
     });
 
@@ -59,6 +66,7 @@ function extractJSON(text) {
     return JSON.parse(jsonMatch[0]);
 }
 
+// ── Appliance Scanner ───────────────────────────────────────────
 async function analyzeDeviceImage(imageBuffer, mimeType) {
     try {
         const prompt = `
@@ -66,12 +74,12 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
 
         YOUR PROCESS:
         1. LOOK for any visible text: brand name, model number, nameplate, sticker, labels
-        2. IDENTIFY the exact brand and model if possible (e.g., "Samsung RT38K5062SL", "Russell Hobbs RHKC1", "Defy DMO 367")
-        3. If you can identify the brand/model, USE YOUR KNOWLEDGE of that exact model's specifications for wattage
-        4. If you cannot see the brand/model, identify the TYPE of appliance and use typical South African wattage for that type
-        5. Estimate realistic daily usage hours based on the appliance type in a typical SA household
+        2. IDENTIFY the exact brand and model if possible
+        3. If you can identify the brand/model, USE YOUR KNOWLEDGE of that exact model's specs
+        4. If you cannot see the brand/model, identify the TYPE and use typical SA wattage
+        5. Estimate realistic daily usage hours for a typical SA household
 
-        COMMON SA APPLIANCE WATTAGES (use these as fallback):
+        COMMON SA APPLIANCE WATTAGES (fallback):
         - Geyser: 2000-3000W | Kettle: 1800-2200W | Stove plate: 1500-2000W
         - Microwave: 800-1200W | Iron: 1000-1500W | Washing machine: 500-800W
         - Fridge/Freezer: 100-200W | TV (LED): 50-150W | TV (older): 150-300W
@@ -81,9 +89,8 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
 
         Return ONLY a JSON object:
         {
-            "name": "Brand Model (Type)" or just "Type" if brand unknown — e.g. "Samsung RT38 Fridge" or "Electric Kettle",
-            "watts": exact_number_not_range,
-            "surge_watts": number_or_0,
+            "name": "Brand Model (Type)" or just "Type",
+            "watts": exact_number,
             "hours_per_day": realistic_daily_hours,
             "days_per_week": typical_days,
             "brand": "Brand if visible" or null,
@@ -91,7 +98,7 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
             "confidence": "HIGH" if brand/model identified, "MEDIUM" if type identified, "LOW" if guessing
         }
 
-        IMPORTANT: Do NOT include markdown formatting. Return ONLY the raw JSON.
+        Return ONLY the raw JSON, no markdown.
         `;
 
         const text = await callAI(prompt, {
@@ -101,447 +108,71 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
 
         console.log("AI Scan Response:", text);
         return extractJSON(text);
-
     } catch (error) {
         console.error("Scan Error:", error);
         throw new Error("Failed to analyze image: " + error.message);
     }
 }
 
-async function getEnergyTips(deviceList, userProfile = {}) {
-    if (!deviceList || deviceList.length === 0) {
-        return { tips: [], schedules: [] };
-    }
+// ── AI Energy Consultant Chat ───────────────────────────────────
+async function consultantChat({ message, history, deviceSummary, totalDailyKwh, ratePerKwh, municipality, season, city, province }) {
     try {
         const now = new Date();
         const currentHour = now.getHours();
-        const currentMonth = now.getMonth() + 1;
-        const season = (currentMonth >= 5 && currentMonth <= 8) ? 'WINTER' : 'SUMMER';
         const isOffPeak = (currentHour >= 22 || currentHour < 6);
-        const userRate = userProfile.rate_per_kwh || 2.72;
-        const municipality = userProfile.municipality || userProfile.city || 'Unknown';
 
-        const prompt = `
-        You are the Tips, Recommendation & Analysis Agent — a Senior Energy Consultant in South Africa.
+        const systemPrompt = `You are an expert South African Energy Consultant. You are friendly, knowledgeable, and actionable.
 
-        YOUR TASK: Analyze EACH appliance below individually and generate unique, personalized energy-saving tips.
+YOUR PERSONALITY:
+- Warm and approachable, like a trusted advisor
+- Always specific with numbers: "Your geyser costs R8.40/day" not "your geyser costs a lot"
+- Give practical SA-specific advice
+- Reference actual times, amounts, and savings
 
-        === HOUSEHOLD CONTEXT ===
-        - Current date/time: ${now.toLocaleDateString('en-ZA')} ${now.toLocaleTimeString('en-ZA')}
-        - Season: ${userProfile.season || season} (Feb is SUMMER in SA)
-        - User location: ${municipality}, ${userProfile.province || 'South Africa'}
-        - Electricity distributor: ${userProfile.distributor || municipality}
-        - Effective rate: R${userRate}/kWh
-        ${userProfile.isIBT ? `- TARIFF (Inclining Block - ${userProfile.distributor}):
-          Block 1: R${userProfile.block1_rate}/kWh for 0-${userProfile.block1_limit} kWh
-          Block 2: R${userProfile.block2_summer}/kWh (summer) / R${userProfile.block2_winter}/kWh (winter) above ${userProfile.block1_limit} kWh
-          ⚡ KEY INSIGHT: If household drops below ${userProfile.block1_limit} kWh/month, EVERY unit costs only R${userProfile.block1_rate} instead of R${userProfile.block2_summer}+!` : `- Flat rate: R${userRate}/kWh`}
-        - Household: ${userProfile.household_size || '?'} people, ${userProfile.property_type || 'Unknown'} type
-        - Pool: ${userProfile.has_pool ? 'YES' : 'No'} | Cooking fuel: ${userProfile.cooking_fuel || '?'} | WFH: ${userProfile.work_from_home || '?'}
-        - Monthly spend: R${userProfile.monthly_spend || '?'}
-        - Peak sun hours: ${userProfile.peakSunHours || 5.0}h/day
+CURRENT CONTEXT:
+- Date/Time: ${now.toLocaleDateString('en-ZA')} ${now.toLocaleTimeString('en-ZA')}
+- Season: ${season} (SA seasons)
+- Location: ${city || 'Unknown'}, ${province || 'South Africa'}
+- Municipality/Distributor: ${municipality || 'Unknown'}
+- Electricity rate: R${ratePerKwh}/kWh
+- Currently ${isOffPeak ? 'OFF-PEAK (cheaper)' : 'PEAK/STANDARD (more expensive)'}
+- Total home usage: ${totalDailyKwh.toFixed(2)} kWh/day = R${(totalDailyKwh * ratePerKwh).toFixed(2)}/day = R${(totalDailyKwh * ratePerKwh * 30).toFixed(0)}/month
 
-        === SA OFF-PEAK HOURS ===
-        Off-peak: 22:00-06:00 weekdays, all weekend
-        Peak: 06:00-09:00 & 17:00-22:00 weekdays
-        Standard: 09:00-17:00 weekdays
+SA OFF-PEAK HOURS:
+- Off-peak: 22:00-06:00 weekdays, all weekend
+- Peak: 06:00-09:00 & 17:00-22:00 weekdays
+- Standard: 09:00-17:00 weekdays
 
-        === APPLIANCES TO ANALYZE (one by one) ===
-        ${deviceList.map((d, i) => `${i + 1}. ${d.name} — ${d.watts}W, used ${d.hours_per_day || 0}h/day, ${d.days_per_week || 7} days/week → ${((d.watts * (d.hours_per_day || 0) * (d.days_per_week || 7)) / (7 * 1000)).toFixed(2)} kWh/day → R${((d.watts * (d.hours_per_day || 0) * (d.days_per_week || 7) * userRate) / (7 * 1000) * 30).toFixed(0)}/month`).join('\n        ')}
+USER'S APPLIANCES (by room):
+${deviceSummary || 'No appliances scanned yet. Encourage them to scan their appliances!'}
 
-        === MANDATORY RULES ===
-        1. Generate AT LEAST one unique tip for EVERY appliance listed above. Reference the device by name.
-        2. Show your math: "Your [Device] uses [X]W × [Y]h = [Z] kWh/day → R[cost]/month at R${userRate}/kWh"
-        3. Be SPECIFIC with times: "Turn off at 08:00" not "during the day"
-        4. ${userProfile.isIBT ? `Highlight the Block 1 vs Block 2 threshold: "If you reduce by X kWh, you drop to Block 1 at R${userProfile.block1_rate}/kWh"` : 'Calculate savings using the flat rate'}
-        5. Factor in SEASON = ${userProfile.season || season}: In summer recommend less heating, more ventilation; In winter recommend geyser blankets, insulation
-        6. DO NOT invent appliances not in the list. DO NOT give generic tips.
-        7. Every device over 500W MUST have a schedule entry with exact ON/OFF times.
+RULES:
+1. Always show your math when discussing costs
+2. Reference specific devices by name when giving advice
+3. If they ask about load shedding, give general SA advice (check Eskom Se Push app, etc.)
+4. If they ask about tariffs, use the rate you know (R${ratePerKwh}/kWh for ${municipality})
+5. Keep responses concise — 2-3 paragraphs max
+6. If they haven't scanned appliances yet, suggest they do so first
+7. Use Rand (R) for all monetary values
+8. Be encouraging about their energy-saving efforts`;
 
-        === RESPONSE FORMAT (JSON ONLY, no markdown) ===
-        {
-          "tips": [
-            {
-              "title": "[Device Name]: Specific Action",
-              "description": "Personalized advice with math. E.g. Your Geyser uses 3000W × 8h = 24 kWh/day...",
-              "potential_savings": "R###/month",
-              "implementation_steps": ["Step 1", "Step 2", "Step 3"],
-              "priority": "HIGH/MEDIUM/LOW",
-              "device_name": "Exact device name from list",
-              "payback_period": "Immediate/1 week/1 month"
-            }
-          ],
-          "schedules": [
-            {
-              "device_name": "Exact device name",
-              "turn_on": "HH:MM",
-              "turn_off": "HH:MM",
-              "reason": "Why this time window saves money (reference rate/tariff)",
-              "estimated_daily_saving": "R##"
-            }
-          ]
-        }
+        const formattedHistory = history.map(h => ({
+            role: h.role,
+            content: h.content,
+        }));
 
-        Return ONLY the JSON.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("AI Tips Response:", text);
-        return extractJSON(text);
-
-    } catch (error) {
-        console.error("Tips Error:", error);
-        throw new Error("Failed to generate tips");
-    }
-}
-
-async function checkInventoryCompleteness(deviceList) {
-    try {
-        const prompt = `
-        Analyze this list of electrical devices entered by a user for a home energy audit:
-        ${JSON.stringify(deviceList)}
-
-        Identify common household appliances that are MISSING from this list. 
-        Common items to check for:
-        - Geyser / Water Heater
-        - Refrigerator / Fridge
-        - Washing Machine
-        - Electric Stove / Oven
-        - WiFi Router
-        - Lights / Lighting Circuits
-        - Kettle
-        - TV
-
-        Return ONLY a JSON object with a "missing_items" array. Each item should have:
-        - name: (string) The name of the missing appliance.
-        - question: (string) A friendly question to ask the user (e.g., "I didn't see a Geyser. Do you have an electric water heater?").
-        - estimated_watts: (number) Typical wattage for this appliance.
-        
-        Limit to the top 3 most likely missing essential items. If the list looks complete, return an empty array.
-        Do not include markdown formatting.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("AI Completeness Response:", text);
-        return extractJSON(text);
-
-    } catch (error) {
-        console.error("Completeness Error:", error);
-        return { missing_items: [] };
-    }
-}
-
-async function generateHabits(deviceList) {
-    try {
-        const prompt = `
-        Act as a Professional Energy Consultant.
-        Analyze this inventory for a South African home:
-        ${JSON.stringify(deviceList)}
-
-        Create 5-7 personalized daily energy-saving habits. 
-        Focus on BEHAVIORAL changes based on the SPECIFIC devices present.
-
-        Examples:
-        - If Pool Pump exists -> "Run pool pump for 4h only (Winter)"
-        - If Tumble Dryer exists -> "Sun dry one load of laundry"
-        - If Geyser exists -> "Shower in under 5 minutes"
-        - If Dishwasher exists -> "Run dishwasher only when fully packed"
-        - General -> "Turn off lights in empty rooms"
-
-        Return JSON ONLY:
-        {
-            "habits": [
-                { "title": "Short Title", "description": "Actionable description", "impact_level": "HIGH/MEDIUM/LOW" }
-            ]
-        }
-        `;
-
-        const text = await callAI(prompt);
-        console.log("AI Habits Response:", text);
-        const result = extractJSON(text);
-        return result;
-    } catch (error) {
-        console.error("Habits Error:", error);
-        return { habits: [] };
-    }
-}
-
-async function interviewUser(deviceList) {
-    try {
-        const prompt = `
-        You are an inquisitive Energy Auditor.
-        Review this list of devices:
-        ${JSON.stringify(deviceList)}
-
-        Determine the ONE most critical missing appliance that a typical home should have but is missing here (e.g., Geyser, Fridge, Stove, Kettle).
-        
-        If the list looks complete (has all essentials), return null.
-        
-        If something is missing, ask a friendly question to check if they have it.
-        Also provide the suggested device details if they say "Yes".
-
-        Return JSON ONLY:
-        {
-            "question": "I noticed you don't have a Geyser listed. Do you use an electric water heater?",
-            "suggested_device": { "name": "Geyser (150L)", "watts": 3000, "surge_watts": 0 }
-        }
-        OR return the word null if complete.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("AI Interview Response:", text);
-
-        if (text.includes("null") || text.trim() === "") return null;
-        return extractJSON(text);
-    } catch (error) {
-        console.error("Interview Error:", error);
-        return null;
-    }
-}
-
-async function getSmartSolarQuotes(deviceList, userProfile = {}) {
-    try {
-        let rateInfo = { rate: 2.72, season: 'SUMMER' };
-        let peakSunHours = 5.5;
-        try {
-            const rates = require('./ratesDatabase');
-            rateInfo = rates.getSeasonalRate(userProfile.city || userProfile.province);
-            peakSunHours = rates.getPeakSunHours(userProfile.province);
-        } catch (e) { /* rates module may not exist */ }
-
-        let totalDailyKwh = 0;
-        let totalRunningWatts = 0;
-        let totalSurgeWatts = 0;
-        deviceList.forEach(d => {
-            const hours = d.hours_per_day || 4;
-            totalDailyKwh += (d.watts * hours) / 1000;
-            totalRunningWatts += d.watts;
-            totalSurgeWatts += (d.surge_watts || d.watts);
+        const reply = await callAI(message, {
+            systemPrompt,
+            history: formattedHistory,
+            temperature: 0.8,
+            maxTokens: 1000,
         });
 
-        const prompt = `
-        You are a Solar Installation Expert in South Africa with 15+ years experience.
-
-        USER PROFILE:
-        - Location: ${userProfile.city || 'Unknown'}, ${userProfile.province || 'South Africa'}
-        - Peak Sun Hours: ${peakSunHours}h/day
-        - Current electricity rate: R${rateInfo.rate}/kWh (${rateInfo.season})
-        - Monthly spend: R${userProfile.monthly_spend || 'Unknown'}
-        - Household size: ${userProfile.household_size || 'Unknown'}
-        - Property type: ${userProfile.property_type || 'Unknown'}
-
-        LOAD ANALYSIS:
-        - Total daily consumption: ${totalDailyKwh.toFixed(1)} kWh/day
-        - Total running watts: ${totalRunningWatts}W
-        - Total surge watts: ${totalSurgeWatts}W
-        - Devices: ${JSON.stringify(deviceList.map(d => ({ name: d.name, watts: d.watts, surge: d.surge_watts })))}
-
-        Generate 3 REALISTIC solar package options for this home.
-        Use REAL South African component pricing (2024/2025 prices).
-
-        FORMAT AS JSON ONLY:
-        {
-          "packages": [
-            {
-              "tier": "Essential",
-              "description": "What this covers",
-              "devices_covered": ["list of devices"],
-              "inverter": "Brand/type and size",
-              "inverter_cost": "R##,###",
-              "panels": "Count x Wattage",
-              "panels_cost": "R##,###",
-              "battery": "Type and size",
-              "battery_cost": "R##,###",
-              "installation_cost": "R##,###",
-              "total_cost": "R##,### - R##,###",
-              "monthly_savings": "R#,###",
-              "payback_years": 5,
-              "recommended_for": "Load shedding backup only"
-            },
-            {
-              "tier": "Comfort",
-              "description": "...",
-              "...": "same fields"
-            },
-            {
-              "tier": "Off-Grid",
-              "description": "...",
-              "...": "same fields"
-            }
-          ]
-        }
-
-        REQUIREMENTS:
-        - Prices must be REALISTIC for SA market
-        - Essential = minimum viable (survive load shedding)
-        - Comfort = full home excluding heavy loads
-        - Off-Grid = complete energy independence
-        - Include installation costs
-        - Calculate payback based on R${rateInfo.rate}/kWh rate
-        - Reference actual component brands available in SA (e.g., Sunsynk, Deye, Canadian Solar)
-
-        Return ONLY the JSON.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("Solar Quotes Response:", text);
-        return extractJSON(text);
+        return reply;
     } catch (error) {
-        console.error("Solar Quotes Error:", error);
-        throw new Error("Failed to generate solar quotes");
+        console.error("Consultant Error:", error);
+        return "I'm having trouble connecting right now. Please try again in a moment. In the meantime, a quick tip: check if your geyser is running during peak hours (6-9am, 5-10pm) — that's when electricity costs the most!";
     }
 }
 
-async function getOnboardingQuestion(currentProfile) {
-    try {
-        // Critical fields to check before "Camera Mode"
-        const requiredFields = ['city', 'province', 'monthly_spend', 'household_size', 'property_type', 'has_pool', 'work_from_home'];
-
-        // Check if we have everything
-        const missingFields = requiredFields.filter(f => !currentProfile[f] && currentProfile[f] !== false && currentProfile[f] !== 0);
-
-        if (missingFields.length === 0) {
-            return {
-                question: "That's all I need! Now comes the fun part — let's scan your appliances! 📸",
-                field: null,
-                options: [],
-                type: "done",
-                complete: true
-            };
-        }
-
-        const prompt = `
-        You are an energy consultant onboarding a new user.
-        
-        Current user profile:
-        ${JSON.stringify(currentProfile)}
-
-        Fields to fill (IN ORDER OF PRIORITY):
-        1. city (Text) - If missing, ask "Which city or town do you live in?"
-        2. province (Select: Gauteng, Western Cape, KwaZulu-Natal, Eastern Cape, Free State, Limpopo, Mpumalanga, North West, Northern Cape)
-        3. monthly_spend (Rands) - Ask "Roughly how much do you spend on electricity per month?" (NEVER ask for "monthly_budget")
-        4. household_size (1, 2, 3-4, 5+)
-        5. property_type (House, Apartment, Townhouse)
-        6. has_pool (Yes/No)
-        7. work_from_home (Yes/No)
-
-        Refuse to ask about anything else.
-        Determine which field from the list above is MISSING and ask for it.
-        
-        Format as JSON:
-        {
-          "question": "Friendly question",
-          "field": "EXACT_FIELD_NAME_FROM_LIST_ABOVE",
-          "options": ["Opt1", "Opt2"] (if applicable),
-          "type": "select" or "number" or "text",
-          "complete": false
-        }
-        
-        Return ONLY JSON.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("Onboarding Question:", text);
-        return extractJSON(text);
-    } catch (error) {
-        console.error("Onboarding Question Error:", error);
-
-        // Fallback: If AI fails (e.g. API key issue), ask manually based on currentProfile
-        const fallbackFields = {
-            city: "Which city or town do you live in?",
-            province: "In which province is your home located?",
-            monthly_spend: "Roughly how much do you spend on electricity per month?",
-            household_size: "How many people live in your household?",
-            property_type: "What type of property do you live in? (House, Apartment, etc.)",
-            has_pool: "Does your home have a swimming pool?",
-            work_from_home: "Do you or anyone in your house work from home?"
-        };
-
-        const firstMissing = missingFields[0];
-        if (firstMissing && fallbackFields[firstMissing]) {
-            console.log("Using fallback question for:", firstMissing);
-            return {
-                question: fallbackFields[firstMissing],
-                field: firstMissing,
-                options: (firstMissing === 'has_pool' || firstMissing === 'work_from_home') ? ["Yes", "No"] :
-                    (firstMissing === 'household_size') ? ["1", "2", "3-4", "5+"] :
-                        (firstMissing === 'property_type') ? ["House", "Apartment", "Townhouse"] : [],
-                type: (['has_pool', 'work_from_home', 'household_size', 'property_type'].includes(firstMissing)) ? "select" : "text",
-                complete: false
-            };
-        }
-
-        throw new Error("Failed to get onboarding question");
-    }
-}
-
-async function getElectricityPrediction({ devices, kwhRemaining, dailyBurnKwh, daysRemaining, ratePerKwh }) {
-    try {
-        const deviceList = devices.map(d => {
-            const dailyKwh = (d.watts * parseFloat(d.hours_per_day)) / 1000;
-            return `${d.name}: ${d.watts}W × ${d.hours_per_day}h/day = ${dailyKwh.toFixed(2)} kWh/day`;
-        }).join('\n');
-
-        const prompt = `
-        You are an Electricity Conservation AI Agent for a South African household.
-
-        CURRENT SITUATION:
-        - Remaining electricity: ${kwhRemaining} kWh
-        - Daily burn rate: ${dailyBurnKwh} kWh/day
-        - Days remaining at current usage: ${daysRemaining} days
-        - Rate: R${ratePerKwh}/kWh
-        ${daysRemaining <= 3 ? '⚠️ CRITICAL: User is about to run out of electricity!' : ''}
-
-        DEVICE BREAKDOWN (daily consumption):
-        ${deviceList}
-
-        YOUR TASK:
-        1. Analyze each device's contribution to daily burn
-        2. Identify which devices can be reduced or scheduled to EXTEND electricity
-        3. Calculate exactly how many MORE DAYS the user would get by following your advice
-        4. Be specific: "Reduce geyser from 8h to 3h → saves 15 kWh/day → extends by 3 more days"
-        5. Prioritize the BIGGEST energy consumers first
-        6. Give practical SA-specific advice (time-of-use, geyser blankets, etc.)
-
-        Return ONLY this JSON format:
-        {
-            "summary": "At current usage, your electricity will last X days. By following these tips, you can extend it to Y days.",
-            "current_days": ${daysRemaining},
-            "optimized_days": calculated_number_after_savings,
-            "daily_burn_current": ${dailyBurnKwh},
-            "daily_burn_optimized": calculated_after_reductions,
-            "recommendations": [
-                {
-                    "device": "Device name",
-                    "current_usage": "Xh/day",
-                    "recommended_usage": "Yh/day",
-                    "kwh_saved_daily": number,
-                    "days_extended": number,
-                    "action": "Specific instruction - e.g. Turn geyser off at 08:00, on at 16:00",
-                    "priority": "HIGH/MEDIUM/LOW"
-                }
-            ],
-            "emergency_tips": [
-                "If critically low: specific drastic measure to survive until payday"
-            ]
-        }
-
-        Return ONLY the JSON, no markdown.
-        `;
-
-        const text = await callAI(prompt);
-        console.log("Electricity Prediction Response:", text);
-        return extractJSON(text);
-    } catch (error) {
-        console.error("Electricity Prediction Error:", error);
-        return {
-            summary: `At current usage (~${dailyBurnKwh} kWh/day), your electricity will last approximately ${daysRemaining.toFixed(1)} days.`,
-            current_days: daysRemaining,
-            optimized_days: daysRemaining,
-            recommendations: [],
-            emergency_tips: ["Reduce geyser usage to save the most electricity."]
-        };
-    }
-}
-
-module.exports = { analyzeDeviceImage, getEnergyTips, checkInventoryCompleteness, generateHabits, interviewUser, getSmartSolarQuotes, getOnboardingQuestion, getElectricityPrediction };
+module.exports = { analyzeDeviceImage, consultantChat };
