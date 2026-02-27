@@ -493,7 +493,7 @@ app.post('/api/advisor/chat', async (req, res) => {
             [userId, 'user', message]
         );
 
-        // Get user context
+        // Get user context (including lifestyle_context)
         const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
         const user = userRes.rows[0];
 
@@ -527,7 +527,9 @@ app.post('/api/advisor/chat', async (req, res) => {
 
         const totalDailyKwh = devicesRes.rows.reduce((sum, d) => sum + (d.watts * d.hours_per_day / 1000), 0);
 
-        const { consultantChat } = require('./services/geminiService');
+        const { consultantChat, extractLifestyleFromChat } = require('./services/geminiService');
+
+        // Pass lifestyle context to the consultant
         const reply = await consultantChat({
             message,
             history,
@@ -538,6 +540,7 @@ app.post('/api/advisor/chat', async (req, res) => {
             season: seasonalInfo.season,
             city: user?.city,
             province: user?.province,
+            lifestyleContext: user?.lifestyle_context || '',
         });
 
         // Save assistant reply
@@ -545,6 +548,21 @@ app.post('/api/advisor/chat', async (req, res) => {
             'INSERT INTO chat_messages (user_id, role, content) VALUES ($1, $2, $3)',
             [userId, 'assistant', reply]
         );
+
+        // Extract lifestyle insights from the user's message (async, non-blocking)
+        extractLifestyleFromChat(message, user?.lifestyle_context || '').then(async (result) => {
+            if (result.found && result.updatedContext) {
+                try {
+                    await pool.query(
+                        'UPDATE users SET lifestyle_context = $1 WHERE id = $2',
+                        [result.updatedContext, userId]
+                    );
+                    console.log(`📝 Updated lifestyle for user ${userId}:`, result.facts);
+                } catch (e) {
+                    console.error('Lifestyle save error:', e.message);
+                }
+            }
+        }).catch(e => console.error('Lifestyle extraction failed:', e.message));
 
         res.json({ reply });
     } catch (err) {
@@ -894,6 +912,83 @@ app.get('/api/agent/predict', async (req, res) => {
         res.json(prediction);
     } catch (err) {
         console.error('Agent predict error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// LIVE METER — Calculated estimation from sync + device draw
+// ═══════════════════════════════════════════════════════════════
+
+app.get('/api/meter/live', async (req, res) => {
+    const { homeId } = req.query;
+    if (!homeId) return res.status(400).json({ error: 'homeId required' });
+
+    try {
+        // Get latest meter sync
+        const syncRes = await pool.query(
+            `SELECT kwh_purchased, purchased_at FROM electricity_purchases 
+             WHERE home_id = $1 AND notes = 'SYNC_RECORD' 
+             ORDER BY purchased_at DESC LIMIT 1`,
+            [homeId]
+        );
+
+        let lastSyncDate = null;
+        let syncedKwh = 0;
+        let totalTopUps = 0;
+
+        if (syncRes.rows.length > 0) {
+            syncedKwh = parseFloat(syncRes.rows[0].kwh_purchased);
+            lastSyncDate = syncRes.rows[0].purchased_at;
+
+            // Add any top-ups purchased after the sync
+            const topUpsRes = await pool.query(
+                `SELECT COALESCE(SUM(kwh_purchased), 0) as total FROM electricity_purchases 
+                 WHERE home_id = $1 AND notes != 'SYNC_RECORD' AND purchased_at > $2`,
+                [homeId, lastSyncDate]
+            );
+            totalTopUps = parseFloat(topUpsRes.rows[0].total) || 0;
+        }
+
+        // Calculate total daily usage from all devices
+        const devicesRes = await pool.query(
+            'SELECT watts, hours_per_day, days_per_week FROM devices WHERE home_id = $1',
+            [homeId]
+        );
+
+        const totalDailyKwh = devicesRes.rows.reduce((sum, d) => {
+            const weeklyFactor = (parseFloat(d.days_per_week) || 7) / 7;
+            return sum + (d.watts * parseFloat(d.hours_per_day) / 1000) * weeklyFactor;
+        }, 0);
+
+        // Days since last sync
+        const daysSinceSync = lastSyncDate
+            ? Math.max(0, (Date.now() - new Date(lastSyncDate).getTime()) / (1000 * 60 * 60 * 24))
+            : 0;
+
+        // Estimated remaining = synced + topups - (daily usage × days elapsed)
+        const consumed = totalDailyKwh * daysSinceSync;
+        const estimatedKwh = Math.max(0, (syncedKwh + totalTopUps) - consumed);
+        const daysLeft = totalDailyKwh > 0 ? Math.max(0, estimatedKwh / totalDailyKwh) : 999;
+
+        // Accuracy degrades over time
+        let accuracy = 'high';
+        if (daysSinceSync > 7) accuracy = 'medium';
+        if (daysSinceSync > 14) accuracy = 'low';
+        if (!lastSyncDate) accuracy = 'none';
+
+        res.json({
+            estimatedKwh: Math.round(estimatedKwh * 10) / 10,
+            daysLeft: Math.round(daysLeft * 10) / 10,
+            totalDailyKwh: Math.round(totalDailyKwh * 100) / 100,
+            dailyCost: Math.round(totalDailyKwh * 3.2 * 100) / 100,
+            lastSyncDate,
+            daysSinceSync: Math.round(daysSinceSync * 10) / 10,
+            accuracy,
+            deviceCount: devicesRes.rows.length,
+        });
+    } catch (err) {
+        console.error('Live meter error:', err);
         res.status(500).json({ error: err.message });
     }
 });

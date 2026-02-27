@@ -19,6 +19,7 @@ async function initDB() {
                 latitude NUMERIC(10,7),
                 longitude NUMERIC(10,7),
                 push_token TEXT,
+                lifestyle_context TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             );
 
@@ -146,6 +147,7 @@ async function initDB() {
         try { await pool.query("ALTER TABLE users ALTER COLUMN email DROP NOT NULL"); } catch (e) { }
         try { await pool.query("ALTER TABLE users ALTER COLUMN password DROP NOT NULL"); } catch (e) { }
         try { await pool.query("ALTER TABLE users ALTER COLUMN name DROP NOT NULL"); } catch (e) { }
+        try { await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS lifestyle_context TEXT"); } catch (e) { }
 
         console.log('✅ V2 columns verified on legacy tables');
 
