@@ -68,6 +68,7 @@ async function initDB() {
                 days_per_week INTEGER DEFAULT 7,
                 image_thumbnail TEXT,
                 ai_confidence VARCHAR(10),
+                ai_tip TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             );
 
@@ -129,7 +130,8 @@ async function initDB() {
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS model VARCHAR(100)",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS days_per_week INTEGER DEFAULT 7",
             "ALTER TABLE devices ADD COLUMN IF NOT EXISTS image_thumbnail TEXT",
-            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_confidence VARCHAR(10)"
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_confidence VARCHAR(10)",
+            "ALTER TABLE devices ADD COLUMN IF NOT EXISTS ai_tip TEXT"
         ];
 
         for (const query of alters) {

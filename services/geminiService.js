@@ -174,5 +174,115 @@ RULES:
         return "I'm having trouble connecting right now. Please try again in a moment. In the meantime, a quick tip: check if your geyser is running during peak hours (6-9am, 5-10pm) — that's when electricity costs the most!";
     }
 }
+// ── Per-Appliance Tip Generator ─────────────────────────────────
+async function generateDeviceTip({ name, watts, hours_per_day, days_per_week }) {
+    try {
+        const dailyKwh = (watts * (hours_per_day || 4)) / 1000;
+        const monthlyCost = dailyKwh * (days_per_week || 7) / 7 * 30 * 3.2;
 
-module.exports = { analyzeDeviceImage, consultantChat };
+        const prompt = `You are a South African energy-saving expert. Generate ONE concise, actionable tip for this appliance:
+
+APPLIANCE: ${name}
+WATTAGE: ${watts}W
+DAILY USE: ${hours_per_day || 4} hours
+WEEKLY USE: ${days_per_week || 7} days
+DAILY kWh: ${dailyKwh.toFixed(2)} kWh
+ESTIMATED MONTHLY COST: R${monthlyCost.toFixed(0)}
+
+Rules:
+- Maximum 2 sentences
+- Be SPECIFIC to this appliance type (e.g. geyser timer, fridge temperature, LED swap)
+- Include the potential Rand saving if they follow the tip
+- Use South African context (Eskom tariffs, load shedding, off-peak hours)
+- Don't use markdown, just plain text
+- Be encouraging, not preachy`;
+
+        const tip = await callAI(prompt, { temperature: 0.6, maxTokens: 150 });
+        return tip.trim();
+    } catch (error) {
+        console.error('Tip generation error:', error.message);
+        // Fallback tips based on wattage
+        if (watts >= 2000) return `High-power appliance (${watts}W). Use during off-peak hours (10pm-6am) to save up to 40% on this device's electricity cost.`;
+        if (watts >= 1000) return `This ${watts}W appliance costs roughly R${((watts * (hours_per_day || 4) / 1000) * 3.2).toFixed(0)}/day. Reduce usage by 1 hour daily to save ~R${((watts / 1000) * 3.2).toFixed(0)}/day.`;
+        if (watts >= 200) return `Running at ${watts}W for ${hours_per_day || 4}h/day. Consider switching to a more energy-efficient model when replacing to cut costs.`;
+        return `Low-power device (${watts}W). Great choice! Keep using energy-efficient appliances like this.`;
+    }
+}
+
+// ── Advanced Agent: Budget Prediction ───────────────────────────
+async function agentPredict({ devices, monthlyBudget, meterBalance, daysLeftInMonth, ratePerKwh }) {
+    try {
+        const deviceList = devices.map(d =>
+            `• ${d.name}: ${d.watts}W × ${d.hours_per_day}h/day = ${((d.watts * d.hours_per_day) / 1000).toFixed(2)} kWh/day (R${((d.watts * d.hours_per_day / 1000) * ratePerKwh).toFixed(2)}/day)`
+        ).join('\n');
+
+        const totalDailyKwh = devices.reduce((sum, d) => sum + (d.watts * d.hours_per_day / 1000), 0);
+        const totalDailyCost = totalDailyKwh * ratePerKwh;
+        const projectedMonthlySpend = totalDailyCost * 30;
+        const kwhNeededToEndOfMonth = totalDailyKwh * daysLeftInMonth;
+
+        const prompt = `You are an advanced South African energy management AI agent. Analyze this household's energy situation and provide a detailed prediction.
+
+HOUSEHOLD DATA:
+Monthly Budget: R${monthlyBudget || 'Not set'}
+Current Meter Balance: ${meterBalance ? meterBalance + ' kWh remaining' : 'Unknown'}
+Days Left in Month: ${daysLeftInMonth}
+Electricity Rate: R${ratePerKwh}/kWh
+
+APPLIANCES:
+${deviceList}
+
+CALCULATED TOTALS:
+Total Daily Consumption: ${totalDailyKwh.toFixed(2)} kWh/day
+Total Daily Cost: R${totalDailyCost.toFixed(2)}/day
+Projected Monthly Spend: R${projectedMonthlySpend.toFixed(0)}/month
+kWh Needed Until Month End: ${kwhNeededToEndOfMonth.toFixed(1)} kWh
+
+ANALYSIS REQUIRED:
+Return a JSON object with this exact structure:
+{
+    "status": "GREEN" or "YELLOW" or "RED",
+    "headline": "One-line summary of their situation",
+    "prediction": "Will they run out? When? Be specific with dates.",
+    "savings_actions": [
+        {
+            "device": "device name",
+            "action": "what to do",
+            "saving_kwh": number,
+            "saving_rand": number
+        }
+    ],
+    "schedule_suggestions": [
+        {
+            "device": "device name", 
+            "turn_on": "HH:MM",
+            "turn_off": "HH:MM",
+            "reason": "why this schedule"
+        }
+    ],
+    "monthly_forecast": "Detailed forecast paragraph with specific numbers"
+}
+
+Status meanings:
+- GREEN: Budget and meter will last comfortably
+- YELLOW: Cutting it close, minor adjustments needed
+- RED: Will run out before month end, urgent action needed
+
+Return ONLY the raw JSON, no markdown.`;
+
+        const response = await callAI(prompt, { temperature: 0.4, maxTokens: 1500 });
+        return extractJSON(response);
+    } catch (error) {
+        console.error('Agent predict error:', error.message);
+        return {
+            status: 'YELLOW',
+            headline: 'Unable to generate full analysis right now',
+            prediction: 'Check back shortly for a detailed prediction.',
+            savings_actions: [],
+            schedule_suggestions: [],
+            monthly_forecast: 'Analysis temporarily unavailable. Your current daily usage appears to be normal for a South African household.'
+        };
+    }
+}
+
+module.exports = { analyzeDeviceImage, consultantChat, generateDeviceTip, agentPredict };

@@ -245,6 +245,15 @@ app.post('/api/devices', async (req, res) => {
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *
         `, [roomId, userId, homeId, name, brand, model, watts, hours_per_day || 4, days_per_week || 7, image_thumbnail, ai_confidence]);
 
+        // Generate AI tip for this appliance (non-blocking)
+        const { generateDeviceTip } = require('./services/geminiService');
+        generateDeviceTip({ name, watts, hours_per_day: hours_per_day || 4, days_per_week: days_per_week || 7 })
+            .then(tip => {
+                pool.query('UPDATE devices SET ai_tip = $1 WHERE id = $2', [tip, result.rows[0].id]);
+                console.log(`Tip generated for ${name}: ${tip.substring(0, 60)}...`);
+            })
+            .catch(err => console.error('Tip gen failed:', err.message));
+
         // Upsert to shared RAG knowledge base
         const existingKnowledge = await pool.query(
             'SELECT id, times_confirmed, avg_hours_per_day FROM appliance_knowledge WHERE LOWER(name) = LOWER($1) AND watts = $2',
@@ -259,10 +268,8 @@ app.post('/api/devices', async (req, res) => {
                 [newAvg.toFixed(1), k.id]
             );
         } else {
-            // Get user's city for regional context
             const userRes = await pool.query('SELECT city FROM users WHERE id = $1', [userId]);
             const region = userRes.rows[0]?.city || 'South Africa';
-
             await pool.query(
                 'INSERT INTO appliance_knowledge (name, brand, model, watts, avg_hours_per_day, region) VALUES ($1, $2, $3, $4, $5, $6)',
                 [name, brand, model, watts, hours_per_day || 4, region]
@@ -832,6 +839,62 @@ app.post('/api/meter/tips', async (req, res) => {
     } catch (err) {
         console.error('Meter tips error:', err);
         res.status(500).json({ error: 'Failed to get tips. Try again later.' });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// AGENT — Advanced Budget Prediction & Scheduling
+// ═══════════════════════════════════════════════════════════════
+
+app.get('/api/agent/predict', async (req, res) => {
+    const { homeId } = req.query;
+    if (!homeId) return res.status(400).json({ error: 'homeId required' });
+
+    try {
+        // Get all devices for this home
+        const devicesRes = await pool.query(
+            'SELECT name, watts, hours_per_day, days_per_week FROM devices WHERE home_id = $1',
+            [homeId]
+        );
+
+        // Get home budget info
+        const homeRes = await pool.query(
+            'SELECT monthly_budget, meter_number FROM homes WHERE id = $1',
+            [homeId]
+        );
+        const home = homeRes.rows[0];
+
+        // Get latest meter sync balance
+        let meterBalance = null;
+        try {
+            const syncRes = await pool.query(
+                `SELECT kwh_purchased FROM electricity_purchases WHERE home_id = $1 AND notes = 'SYNC_RECORD' ORDER BY purchased_at DESC LIMIT 1`,
+                [homeId]
+            );
+            if (syncRes.rows.length > 0) meterBalance = parseFloat(syncRes.rows[0].kwh_purchased);
+        } catch (e) { /* no sync data */ }
+
+        // Calculate days left in month
+        const now = new Date();
+        const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+        const daysLeft = lastDay - now.getDate();
+
+        // Get rate
+        const ratePerKwh = 3.2; // fallback SA average rate
+
+        const { agentPredict } = require('./services/geminiService');
+        const prediction = await agentPredict({
+            devices: devicesRes.rows,
+            monthlyBudget: home?.monthly_budget,
+            meterBalance,
+            daysLeftInMonth: daysLeft,
+            ratePerKwh,
+        });
+
+        res.json(prediction);
+    } catch (err) {
+        console.error('Agent predict error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
