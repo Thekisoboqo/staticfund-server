@@ -109,8 +109,77 @@ async function initDB() {
                 purchased_at TIMESTAMP DEFAULT NOW(),
                 created_at TIMESTAMP DEFAULT NOW()
             );
+
+            -- V3 Mesh Network & Environmental Guardian Tables
+            CREATE TABLE IF NOT EXISTS community_intelligence (
+                id SERIAL PRIMARY KEY,
+                topic VARCHAR(100), -- 'appliance_efficiency', 'solar_yield', 'grid_stability'
+                context_data JSONB, -- The actual learned insights
+                confidence REAL,
+                discovered_by_home_id INTEGER REFERENCES homes(id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS water_readings (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                reading_liters INTEGER,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS garden_plots (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                plot_name VARCHAR(100),
+                crop_types JSONB, -- list of crops
+                latitude REAL,
+                longitude REAL,
+                soil_moisture_estimate REAL,
+                last_watered TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- Phase 5: B2B Marketplace & Lead Generation
+            CREATE TABLE IF NOT EXISTS installers (
+                id SERIAL PRIMARY KEY,
+                company_name VARCHAR(255) NOT NULL,
+                city VARCHAR(100),
+                province VARCHAR(100),
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                service_radius_km INTEGER DEFAULT 50,
+                rating REAL DEFAULT 4.5,
+                specializations TEXT[],
+                contact_email VARCHAR(255),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS market_leads (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER REFERENCES homes(id) ON DELETE CASCADE,
+                installer_id INTEGER REFERENCES installers(id) ON DELETE SET NULL,
+                lead_report JSONB, -- The "Bankable Report" data
+                status VARCHAR(20) DEFAULT 'NEW',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         `);
-        console.log('✅ V2 Database schemas created/verified');
+        console.log('✅ V2/V5 Database schemas created/verified');
+
+        // Seed some installers if table is empty
+        const instCount = await pool.query('SELECT COUNT(*) FROM installers');
+        if (parseInt(instCount.rows[0].count) === 0) {
+            console.log('🌱 Seeding installers...');
+            const seedInstallers = [
+                ['Bloem Solar Tech', 'Bloemfontein', 'Free State', -29.118, 26.223, 100, 4.8, ['residential', 'off-grid'], 'sales@bloemsolar.co.za'],
+                ['Mangaung Energy Solutions', 'Bloemfontein', 'Free State', -29.155, 26.199, 50, 4.5, ['commercial', 'residential'], 'info@mangaungenergy.com']
+            ];
+            for (const inst of seedInstallers) {
+                await pool.query(`
+                    INSERT INTO installers (company_name, city, province, latitude, longitude, service_radius_km, rating, specializations, contact_email)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                `, inst);
+            }
+        }
 
         // Add missing V2 columns to V1 tables using try-catch blocks to ignore 'column already exists' errors
         const alters = [
@@ -156,6 +225,10 @@ async function initDB() {
     }
 }
 
-initDB();
+// Only auto-initialize if it's the main entry point or explicitly requested
+// (In production, we often call initDB manually during startup)
+if (require.main === module) {
+    initDB();
+}
 
-module.exports = pool;
+module.exports = Object.assign(pool, { initDB });
