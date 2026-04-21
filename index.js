@@ -411,8 +411,7 @@ app.post('/api/scan', async (req, res) => {
     try {
         // Step 1: AI identifies what the appliance IS from the image
         const { analyzeDeviceImage } = require('./services/geminiService');
-        const imageBuffer = Buffer.from(imageBase64, 'base64');
-        const aiResult = await analyzeDeviceImage(imageBuffer, mimeType || 'image/jpeg', req.header('x-api-key') || req.body.apiKey);
+        const aiResult = await analyzeDeviceImage(imageBase64, mimeType || 'image/jpeg', req.header('x-api-key') || req.body.apiKey);
 
         // Step 2: Check RAG knowledge base for community-verified data
         // Search multiple ways for best match
@@ -789,24 +788,56 @@ app.get('/api/meter/status/:homeId', async (req, res) => {
             daysElapsed: Math.round(daysElapsed),
             recentPurchases: historyRes.rows,
         });
-
-        res.json({
-            meterNumber: homeRes.rows[0]?.meter_number || null,
-            totalPurchasedKwh: parseFloat(totalPurchased.toFixed(2)),
-            dailyConsumptionKwh: parseFloat(dailyConsumption.toFixed(2)),
-            estimatedConsumedKwh: parseFloat(estimatedConsumed.toFixed(2)),
-            kwhRemaining: parseFloat(kwhRemaining.toFixed(2)),
-            daysRemaining,
-            percentRemaining,
-            dailyCostRand: parseFloat((dailyConsumption * rateInfo.rate).toFixed(2)),
-            ratePerKwh: rateInfo.rate,
-            municipality: rateInfo.municipality,
-            daysElapsed,
-            recentPurchases: recentRes.rows,
-        });
     } catch (err) {
         console.error('Meter status error:', err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// COPILOT INSIGHTS
+// ═══════════════════════════════════════════════════════════════
+
+app.get('/api/copilot/insights/:homeId', async (req, res) => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS copilot_insights (
+                id SERIAL PRIMARY KEY,
+                home_id INTEGER,
+                spike_watts INTEGER,
+                deduced_appliance VARCHAR(100),
+                actionable_tip TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        const result = await pool.query(
+            "SELECT * FROM copilot_insights WHERE home_id = $1 ORDER BY created_at DESC LIMIT 10",
+            [req.params.homeId]
+        );
+        res.json({ success: true, insights: result.rows });
+    } catch (err) {
+        console.error('Copilot Insights API Error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// LIVE MOCK SMART METER DATA
+// ═══════════════════════════════════════════════════════════════
+const SmartMeterService = require('./server/services/smartMeterService');
+
+app.get('/api/meter/live/:homeId', async (req, res) => {
+    try {
+        // In a real app, you would look up the meter number for this home here
+        const meterNumber = req.query.meter || 'MOCK-123456';
+
+        // Fetch the realistic live mockup data
+        const liveData = await SmartMeterService.getLiveMeterStatus(meterNumber, req.user?.id, req.params.homeId);
+
+        res.json({ success: true, data: liveData });
+    } catch (err) {
+        console.error('Smart Meter API Error:', err.message);
+        res.status(500).json({ error: 'Failed to fetch live meter data' });
     }
 });
 
@@ -2070,6 +2101,69 @@ app.get('/api/outages/active', async (req, res) => {
             [city, province]
         );
         res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// INSTALLER ENGINEERING SUITE
+// ═══════════════════════════════════════════════════════════════
+
+const { calculateWireSizing, analyzeSiteDesign } = require('./server/services/engineeringAgent');
+
+// Engineering Tool: Wire Sizing
+app.post('/api/installer/engineer/wire-size', (req, res) => {
+    try {
+        const results = calculateWireSizing(req.body);
+        res.json(results);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Professional Design: Roof Analysis & Placement
+app.post('/api/installer/design', async (req, res) => {
+    const { imageBase64, mimeType, siteDetails } = req.body;
+    if (!imageBase64) return res.status(400).json({ error: 'Image required' });
+
+    try {
+        const buffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        const design = await analyzeSiteDesign(buffer, mimeType || 'image/jpeg', siteDetails || {});
+        
+        // Save to DB if homeId is provided
+        if (siteDetails?.homeId) {
+            await pool.query(`
+                INSERT INTO site_designs (home_id, installer_id, roof_type, panel_count, orientation_degrees, shading_analysis, wire_sizing_json)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `, [siteDetails.homeId, siteDetails.installerId || null, design.roof_type, design.estimated_panel_count, design.orientation_degrees, design.shading_details, JSON.stringify(design.hardware_placement)]);
+        }
+
+        res.json(design);
+    } catch (err) {
+        console.error('Design analysis error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Hardware Catalog Management
+app.post('/api/installer/hardware', async (req, res) => {
+    const { installerId, type, brand, model, specs, priceRand, imageUrl } = req.body;
+    try {
+        const result = await pool.query(`
+            INSERT INTO installer_hardware (installer_id, type, brand, model, specs, price_rand, image_url)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
+        `, [installerId, type, brand, model, JSON.stringify(specs), priceRand, imageUrl]);
+        res.json(result.rows[0]);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/installer/hardware/:installerId', async (req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM installer_hardware WHERE installer_id = $1', [req.params.installerId]);
+        res.json(result.rows);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

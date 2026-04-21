@@ -4,11 +4,11 @@ require('dotenv').config();
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const TEXT_MODEL = 'qwen/qwen-2.5-vl-72b-instruct';
-const VISION_MODEL = 'qwen/qwen3-vl-235b-a22b-thinking';
+const VISION_MODEL = 'google/gemini-2.0-flash-001';
 const RESEARCH_MODEL = 'arcee-ai/trinity-large-preview:free';
-const BOSS_MODEL = 'z-ai/glm-4.5-air:free';
-const REVIEWER_MODEL = 'google/gemma-3-27b-it:free';
-const SOLAR_WATCHER_MODEL = 'qwen/qwen3-235b-a22b-thinking-2507';
+const BOSS_MODEL = 'google/gemini-2.0-flash-001';
+const REVIEWER_MODEL = 'google/gemini-2.0-flash-001';
+const SOLAR_WATCHER_MODEL = 'google/gemini-2.0-flash-001';
 
 // Helper: Send a prompt to OpenRouter and get text response
 async function callAI(prompt, options = {}) {
@@ -78,8 +78,13 @@ function extractJSON(text) {
 }
 
 // ── Appliance Scanner ───────────────────────────────────────────
-async function analyzeDeviceImage(imageBuffer, mimeType) {
+async function analyzeDeviceImage(imageBase64, mimeType, userApiKey) {
     try {
+        // Strip data URI prefix if present
+        const cleanBase64 = typeof imageBase64 === 'string' 
+            ? imageBase64.replace(/^data:image\/\w+;base64,/, '') 
+            : imageBase64.toString('base64');
+            
         const prompt = `
         You are an expert South African appliance identification AI using advanced visual reasoning.
 
@@ -119,10 +124,11 @@ async function analyzeDeviceImage(imageBuffer, mimeType) {
         `;
 
         const text = await callAI(prompt, {
-            imageBase64: imageBuffer.toString("base64"),
+            imageBase64: cleanBase64,
             mimeType,
             model: VISION_MODEL, // Explicitly use the advanced vision model
             maxTokens: 3000, // Allow thinking tokens
+            userApiKey,
         });
 
         console.log(`🔍 AI Scan Response (${VISION_MODEL}):`, text.substring(0, 200));
@@ -730,4 +736,97 @@ Return ONLY raw JSON, no markdown.`;
     }
 }
 
-module.exports = { analyzeDeviceImage, consultantChat, extractLifestyleFromChat, generateDeviceTip, agentPredict, researchApplianceSavings, bossAnalyze, reviewAnalysis, fullApplianceAnalysis, solarWatcherAnalyze };
+// ═════════════════════════════════════════════════════════════════
+// DUAL-AGENT SOLAR AUDIT (Qwen3-VL + GLM-4.5)
+// Qwen analyzes the roof/environment from an image.
+// GLM-4.5 determines the perfect solar system size & ROI.
+// ═════════════════════════════════════════════════════════════════
+
+async function executeDualAgentAudit(roofImageBuffer, mimeType, homeContext, userApiKey) {
+    // Agent 1: Qwen3-VL (Engineer/Vision)
+    let visionAnalysis = null;
+    if (roofImageBuffer) {
+        try {
+            const visionPrompt = `You are a strict South African Solar Engineer AI (Qwen3-VL).
+Analyze this roof/property image for solar feasibility:
+1. Estimate roof size and available space for solar panels.
+2. Identify roof type (tile, corrugated iron, flat).
+3. Detect shading (trees, nearby buildings, chimneys).
+4. Identify orientation/angle if possible (North is best in SA).
+
+Return MUST be JSON:
+{
+  "roof_type": "string",
+  "estimated_panel_capacity": "estimate",
+  "shading_issues": ["list", "of", "issues"],
+  "engineer_notes": "Technical summary of roof viability"
+}`;
+            const visionText = await callAI(visionPrompt, {
+                imageBase64: roofImageBuffer.toString('base64'),
+                mimeType,
+                model: VISION_MODEL,
+                temperature: 0.2,
+                maxTokens: 1000,
+                userApiKey
+            });
+            visionAnalysis = extractJSON(visionText);
+            console.log("👷 Qwen3-VL Roof Analysis:", visionAnalysis);
+        } catch (e) {
+            console.error("Qwen3-VL Roof Analysis Error:", e.message);
+            visionAnalysis = { engineer_notes: "Roof image analysis failed or missing." };
+        }
+    }
+
+    // Agent 2: GLM-4.5 (Designer/Reasoning)
+    try {
+        const glmPrompt = `You are the lead Solar System Designer AI (GLM-4.5) for StaticFund SA.
+Design a highly efficient, bankable solar system based on the following home data and the Engineer's roof analysis.
+
+HOME DATA & CONSUMPTION:
+${JSON.stringify(homeContext, null, 2)}
+
+ENGINEER'S ROOF ANALYSIS:
+${JSON.stringify(visionAnalysis || 'No physical roof data provided.', null, 2)}
+
+SA Solar Constants:
+- Average solar irradiance: 5.5 peak sun hours.
+- Cost: R18,000-25,000 per kW installed.
+- Grid rate: ~R${homeContext.ratePerKwh || 2.50}/kWh.
+
+Calculate ROI accurately. Return ONLY JSON:
+{
+    "solar_readiness_score": 0-100,
+    "recommended_inverter_kw": number,
+    "recommended_battery_kwh": number,
+    "recommended_panels_kw": number,
+    "estimated_monthly_savings_rand": number,
+    "estimated_payback_years": number,
+    "estimated_system_cost_rand": number,
+    "co2_offset_kg_per_year": number,
+    "key_findings": ["finding 1", "finding 2"],
+    "risk_factors": ["risk 1", "risk 2"],
+    "executive_summary": "Professional summary",
+    "detailed_recommendations": "Technical design explanation"
+}
+
+Return ONLY raw JSON, no markdown.`;
+
+        const glmText = await callAI(glmPrompt, {
+            model: BOSS_MODEL,
+            temperature: 0.3,
+            maxTokens: 2000,
+            userApiKey
+        });
+        const finalAudit = extractJSON(glmText);
+        console.log("🧠 GLM-4.5 Final Audit Generated.");
+        return {
+            visionAnalysis,
+            audit: finalAudit
+        };
+    } catch (e) {
+        console.error("GLM-4.5 Audit Generation Error:", e.message);
+        throw e;
+    }
+}
+
+module.exports = { analyzeDeviceImage, consultantChat, extractLifestyleFromChat, generateDeviceTip, agentPredict, researchApplianceSavings, bossAnalyze, reviewAnalysis, fullApplianceAnalysis, solarWatcherAnalyze, executeDualAgentAudit };

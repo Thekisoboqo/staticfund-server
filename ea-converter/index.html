@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EA Converter Pro | Intelligent Trading Strategy Conversion</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <meta name="description" content="Professional EA Converter for MetaTrader and TradingView. Convert Pine Script to MQL5 effortlessly.">
+  </head>
+  <body>
+    <div id="app">
+      <header class="glass-header">
+        <div class="logo">
+          <span class="icon">⚡</span>
+          <h1>EA CONVERTER <span class="badge">PRO</span></h1>
+        </div>
+        <div class="header-actions">
+          <div class="status-indicator">
+            <span class="pulse"></span>
+            NETWORK READY
+          </div>
+          <button id="clear-btn" class="secondary-btn">CLEAR</button>
+        </div>
+      </header>
+
+      <main class="terminal-container">
+        <aside class="sidebar glass-panel">
+          <div class="sidebar-section">
+            <h3>CONFIGURATION</h3>
+            <div class="input-group">
+              <label>SOURCE</label>
+              <select id="source-lang">
+                <option value="pine">Pine Script (v5)</option>
+                <option value="mql4">MQL4</option>
+              </select>
+            </div>
+            <div class="input-group">
+              <label>TARGET</label>
+              <select id="target-lang">
+                <option value="mql5">MQL5</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="sidebar-section">
+            <h3>STRATEGY PRESETS</h3>
+            <div class="preset-chips">
+              <button class="chip active">Trend</button>
+              <button class="chip">SMC</button>
+              <button class="chip">Grid</button>
+            </div>
+          </div>
+
+          <button id="convert-btn" class="primary-btn">CONVERT TO MQL5</button>
+        </aside>
+
+        <section class="editor-section">
+          <div class="editor-pane source">
+            <div class="pane-header">
+              <span>SOURCE CODE</span>
+              <span class="lang-tag">PINE</span>
+            </div>
+            <div id="source-editor" class="monaco-container"></div>
+          </div>
+          <div class="divider">
+            <div class="pipeline-pulse"></div>
+          </div>
+          <div class="editor-pane target">
+            <div class="pane-header">
+              <span>CONVERTED CODE</span>
+              <span class="lang-tag">MQL5</span>
+            </div>
+            <div id="target-editor" class="monaco-container"></div>
+            <button id="copy-btn" class="copy-btn">COPY CODE</button>
+          </div>
+        </section>
+      </main>
+
+      <footer class="glass-footer">
+        <div class="terminal-logs" id="logs">
+          <span class="log-entry system">Initializing EA Converter Engine... [OK]</span>
+          <span class="log-entry system">Ready for input.</span>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

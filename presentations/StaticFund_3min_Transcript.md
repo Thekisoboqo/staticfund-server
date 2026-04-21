@@ -9,9 +9,9 @@
 |-------|---------|----------|------------|
 | 1 | Intro | 15 sec | 0:15 |
 | 2 | Problem | 25 sec | 0:40 |
-| 3 | Solution | 25 sec | 1:05 |
-| 4 | Summer Challenge Activities | 45 sec | 1:50 |
-| 5 | Demo | 25 sec | 2:15 |
+| 3 | Solution & Pivot | 25 sec | 1:05 |
+| 4 | Summer Challenge Tech | 45 sec | 1:50 |
+| 5 | Live Demo | 25 sec | 2:15 |
 | 6 | Challenges & Lessons | 20 sec | 2:35 |
 | 7 | Results & Next Steps | 15 sec | 2:50 |
 | 8 | Team & Ask | 10 sec | 3:00 |
@@ -28,9 +28,9 @@
 
 > "Hi, I'm Thekiso Boqo, and I'm joined by my co-founder Kal-el Peterson.
 > 
-> We are the team behind StaticFund — Smart Energy Audits for a Sustainable Future.
+> We are the team behind StaticFund — the only app that takes a household from saving electricity, to sizing a solar system, to matching with a verified installer.
 > 
-> Today, we want to share our Summer Action Challenge journey and what we've accomplished."
+> Today, we want to share our Summer Action Challenge journey and the massive technical leaps we've made."
 
 ---
 
@@ -38,129 +38,89 @@
 
 > "The problem we set out to solve is this:
 > 
-> South African households are struggling with rising electricity costs. Prepaid electricity doesn't last the month, and people don't know how to reduce their consumption.
+> South African households are struggling with rising electricity costs. When they consider going solar, the industry is fragmented. Installers often use guesswork, leading to under-designed systems that fail or over-designed systems that are unaffordable.
 > 
-> When they consider going solar, installers often use one-size-fits-all solutions — either underdesigning systems that fail, or overdesigning systems that cost too much.
+> Simultaneously, great local solar installers struggle to find qualified, educated leads. 
 > 
-> We saw an opportunity to solve this with technology."
+> We saw an opportunity to solve both sides of the market."
 
 ---
 
-### SLIDE 3: The Solution (25 seconds)
+### SLIDE 3: The Solution & Pivot (25 seconds)
 
-> "Our solution is StaticFund — an AI-powered energy audit app.
+> "Our solution is StaticFund. We started as an AI appliance scanner, but we have evolved into a full B2B dual-sided marketplace.
 > 
-> With StaticFund, users can scan their appliances using their phone camera. The app calculates their exact energy consumption, recommends the right solar and battery size, and provides personalized energy-saving tips.
+> For the Homeowner, we act as an AI Energy Consultant. They scan appliances, we audit their load, and we dynamically size out 3 custom solar packages based on their exact budget constraints.
 > 
-> Our goal is to connect households with verified solar installers who can give them accurate, tailored quotes."
+> For the Installer, we provide a dedicated Portal. When a homeowner requests a quote, it lands directly on the Installer's dashboard as a fully pre-audited, high-quality lead."
 
 ---
 
-### SLIDE 4: What We Did During Summer Action Challenge (45 seconds)
+### SLIDE 4: What We Built During Summer Action Challenge (45 seconds)
 
-> "During this Summer Action Challenge, we focused on three main areas: building, learning, and connecting.
+> "During this Summer Action Challenge, we focused intensely on building advanced technology.
 > 
-> **First — Building the App:**
-> We developed the core features of StaticFund from scratch. I built the AI-powered appliance scanning feature, the energy audit and load analysis, the solar and battery sizing calculator, and the personalized saving tips section. My co-founder Kal-el handled all the backend development and server hosting.
+> **First — The Installer Portal & Routing Engine:**
+> We engineered a complex role-based routing architecture. When an installer logs in, they get a completely different interface designed for B2B pipeline management.
 > 
-> **Second — Creating Marketing Material:**
-> We created a demo video showcasing how StaticFund works — this video demonstrates the scanning, auditing, and recommendation features to potential users and partners.
+> **Second — The AI Lead Sandbox:**
+> We built a proprietary Lead Simulation Engine to solve the 'Cold Start Problem'. During live pitches, we can dynamically generate AI-audited South African leads directly into the system to demonstrate scale.
 > 
-> **Third — Attending Workshops and Networking:**
-> We attended the NPS ESTEMIE NPO EV Workshop, where we learned about electric vehicle technology and charging stations. This gave us insights into the broader green energy ecosystem.
+> **Third — Realtime Data Visualization:**
+> We replaced text-heavy audits with native procedural graphs. Our app now mathematically renders Synthetic 24-hour Load Curves and Energy Intensity Maps right on the phone.
 > 
-> Most importantly, at this workshop, I got the opportunity to pitch StaticFund to the attendees. We're now in a group chat with them, and once our servers are fully ready, we'll share the app link for them to try."
+> We also attended EV workshops, networked, and successfully pivoted our entire technical framework to match what the market actually needs."
 
 ---
 
 ### SLIDE 5: Demo (25 seconds)
 
-> "Let me show you what we built.
+> "Let me show you how seamless this is.
 > 
 > [SHOW APP DEMO]
 > 
-> Here's the StaticFund app. Users can scan any appliance — the AI identifies it and shows its power consumption.
+> A Homeowner opens their Solar Marketplace, reviews their AI-generated packages, and taps 'Request Quotation'.
 > 
-> As appliances are added, the app calculates total energy usage.
+> Instantly, that data is formatted into an engineering audit. 
 > 
-> Users can see personalized saving tips, and if they want solar, the app shows the exact system size they need.
+> [SWITCH TO INSTALLER VIEW]
 > 
-> This is what we built during the Summer Action Challenge."
+> We log over to the Installer Portal. And there it is — the lead appears in real time. The installer sees exactly what the client needs, the size of their geyser, and their budget. It's a completely organic, end-to-end loop."
 
 ---
 
 ### SLIDE 6: Challenges & Lessons Learned (20 seconds)
 
-> "Of course, we faced challenges along the way.
+> "Scaling from a simple utility app to a full multi-user marketplace was our biggest challenge.
 > 
-> The biggest challenges were coding the AI scanning feature and hosting the app on our own servers.
+> We had to securely manage user authentication across different roles, handle real-time database transactions, and build out high-fidelity mock engines to test our own pipeline.
 > 
-> We had to learn new technologies, troubleshoot issues, and iterate quickly.
-> 
-> But these challenges taught us resilience and helped us build a stronger product."
+> These hurdles forced us to think like Systems Engineers, not just app developers."
 
 ---
 
 ### SLIDE 7: Results & Next Steps (15 seconds)
 
-> "Here's where we are now:
+> "Our B2B marketplace loop is now 100% interconnected.
 > 
-> We launched StaticFund in December 2025. We have 8 users signed up and 14 appliances scanned.
+> Our immediate next steps are to use this exact demo to onboard our first 3 verified solar installer partners in the Free State.
 > 
-> We have potential early adopters from the EV workshop who are waiting to try the app.
-> 
-> Our next steps are to scale our servers, onboard our first solar installer partner, and grow our user base."
+> Once installers are onboarded, we will open the consumer gates and direct our waitlist into the app."
 
 ---
 
 ### SLIDE 8: Team & The Ask (10 seconds)
 
-> "We're Thekiso Boqo, Electrical Engineering student, and Kal-el Peterson, Computer Science student.
+> "We're Thekiso Boqo, Electrical/Electronic Engineering student, and Kal-el Peterson, Computer Science student.
 > 
-> We're looking for team members, funding for our infrastructure, and customers.
+> We are looking for potential solar installation partners and seed funding to scale our backend infrastructure.
 > 
-> Thank you for following our Summer Action Challenge journey. We are StaticFund."
+> Thank you for listening. We are StaticFund."
 
 ---
 
-## SUMMARY OF SUMMER ACTION ACTIVITIES
+## TIPS FOR RECORDING THIS NEW PITCH
 
-| Activity | Details |
-|----------|---------|
-| **App Development** | Built scanning, auditing, sizing, and tips features |
-| **Marketing** | Created demo video |
-| **Workshop** | Attended NPS ESTEMIE NPO EV Workshop |
-| **Learning** | EV technology & charging stations |
-| **Networking** | Pitched to workshop attendees, joined group chat |
-| **Partnership Pipeline** | Workshop contacts waiting for app access |
-| **Challenges Overcome** | Coding, app hosting, server setup |
-
----
-
-## TIPS FOR RECORDING
-
-1. **Practice 3-5 times** before recording
-2. **Speak slowly and clearly** — especially on Slide 4 (longest slide)
-3. **Show enthusiasm** when talking about what you built
-4. **Pause between slides** — give viewers time to process
-5. **For the demo (Slide 5):**
-   - Have your app open and ready
-   - Do a quick walkthrough of actual features
-   - Keep it smooth and simple
-
----
-
-## POWERPOINT RECORDING STEPS
-
-1. Go to **Slide Show** → **Record Slide Show**
-2. Click **Record from Beginning**
-3. Speak clearly, advance slides manually
-4. Re-record any slide if needed
-5. Go to **File** → **Export** → **Create a Video**
-6. Select **Full HD (1080p)** and **Use Recorded Timings**
-7. Save as MP4
-
----
-
-*Good luck with your presentation!*
-*StaticFund Team — Summer Action Challenge 2025/2026*
+1. **Pacing is Everything:** The Demo slide (Slide 5) is complex. Have two phones ready if possible, or use the "Pitch Demo Shortcuts" on the login screen to quickly switch between the Homeowner view and the Installer Portal view.
+2. **Visual Impact:** If you are recording slides, make sure they visually show the new Native Graphs (The Load Curve and Stacked Bar) you just built.
+3. **Be confident:** You built an incredibly complex piece of Dual-Sided Marketplace technology. Present it like a proper tech startup founder!
